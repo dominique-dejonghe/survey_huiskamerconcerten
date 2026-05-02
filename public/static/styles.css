@@ -161,11 +161,20 @@ a:hover { color: var(--teal); }
   background: var(--cream); border: 1px solid var(--border);
   border-left: 4px solid var(--orange);
   border-radius: var(--radius-card);
-  padding: 22px 24px; margin: 24px 0;
+  padding: 24px 28px 22px; margin: 24px 0;
   font-size: 16px; color: var(--ink-soft);
+  line-height: 1.7;
+  text-align: left;
+  text-wrap: pretty;
+  hyphens: auto;
+  -webkit-hyphens: auto;
 }
+.intro-card p { margin: 0 0 14px 0; max-width: 62ch; }
 .intro-card p:last-child { margin-bottom: 0; }
-.intro-card strong { color: var(--ink); }
+.intro-card strong { color: var(--ink); font-weight: 700; }
+@media (max-width: 640px) {
+  .intro-card { padding: 20px 18px 18px; font-size: 15px; line-height: 1.65; }
+}
 
 .section-divider {
   margin: 48px 0 20px;

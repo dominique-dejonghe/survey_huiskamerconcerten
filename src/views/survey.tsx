@@ -13,8 +13,8 @@ const SiteHeader: FC = () => (
       </button>
       <nav class="site-nav" id="siteNav">
         <a href="https://www.josvanimmerseel.com/huisconcerten">Tickets</a>
-        <a href="https://www.josvanimmerseel.com">Jos</a>
-        <a href="https://www.josvanimmerseel.com">Ayako</a>
+        <a href="https://www.josvanimmerseel.com/bio_jos">Jos</a>
+        <a href="https://www.ayako-ito-fortepiano.com/">Ayako</a>
       </nav>
     </div>
   </header>
@@ -173,7 +173,7 @@ export const SurveyPage: FC = () => {
       </main>
       <footer class="site-footer">
         <p>
-          <span class="italic-serif">Andre Devaere VZW</span> · Huiskamerconcerten Reeks I ·{' '}
+          <span class="italic-serif">Pensato.org</span> · Huiskamerconcerten Reeks I ·{' '}
           <a href="/privacy">Privacy</a>
         </p>
       </footer>
@@ -192,10 +192,10 @@ export const ThanksPage: FC = () => (
         Jouw stem helpt ons om Reeks II niet zomaar een herhaling te maken,
         maar iets beter.
       </p>
-      <p class="signature">— Dominique Dejonghe, Andre Devaere VZW</p>
+      <p class="signature">— Dominique Dejonghe, Pensato.org</p>
     </main>
     <footer class="site-footer">
-      <p><span class="italic-serif">Andre Devaere VZW</span></p>
+      <p><span class="italic-serif">Pensato.org</span></p>
     </footer>
   </Layout>
 )
@@ -206,7 +206,7 @@ export const PrivacyPage: FC = () => (
     <main class="container" style="padding-top:40px;">
       <h1 style="font-style:italic;">Privacy</h1>
       <p>
-        Andre Devaere VZW verzamelt enkel de antwoorden die je hier geeft. We slaan
+        Pensato.org verzamelt enkel de antwoorden die je hier geeft. We slaan
         geen IP-adressen op in plaintext (enkel een eenrichtingshash voor anti-spam).
         Je naam en e-mailadres bewaren we alleen als je daar expliciet om vraagt
         bij vraag 20.
@@ -219,7 +219,7 @@ export const PrivacyPage: FC = () => (
       <p><a href="/">← Terug naar de vragenlijst</a></p>
     </main>
     <footer class="site-footer">
-      <p><span class="italic-serif">Andre Devaere VZW</span></p>
+      <p><span class="italic-serif">Pensato.org</span></p>
     </footer>
   </Layout>
 )

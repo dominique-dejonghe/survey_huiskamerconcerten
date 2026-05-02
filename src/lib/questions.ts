@@ -109,7 +109,7 @@ export const QUESTIONS: Question[] = [
   // JOS ALS GASTHEER
   {
     type: 'scale', id: 'q10_interactie', number: 10, required: true,
-    text: 'Hoe ervoer je de toelichting en interactie met Jos tijdens de avonden?',
+    text: 'Hoe ervoer je de toelichting en interactie met Jos en/of Ayako tijdens de avonden?',
     min: 1, max: 5, minLabel: 'Zwak', maxLabel: 'Uitstekend',
     section: 'jos',
   },
@@ -145,7 +145,7 @@ export const QUESTIONS: Question[] = [
   },
   {
     type: 'paragraph', id: 'q16_gasten', number: 16, required: false,
-    text: 'Zijn er muzikale gasten of duo-partners die je graag met Jos zou willen horen?',
+    text: 'Zijn er muzikale gasten of duo-partners die je graag met Jos en Ayako zou willen horen?',
     section: 'reeks2',
   },
   {

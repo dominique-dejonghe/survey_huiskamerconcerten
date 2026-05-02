@@ -6,7 +6,7 @@ export const Layout: FC<{ title: string; children: any; admin?: boolean }> = ({ 
       <head>
         <meta charset="UTF-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
-        <meta name="description" content="Feedback voor de huiskamerconcerten Reeks I — Andre Devaere VZW" />
+        <meta name="description" content="Feedback voor de huiskamerconcerten Reeks I — Pensato.org" />
         <meta name="theme-color" content="#1BA8B0" />
         <meta name="robots" content={admin ? 'noindex, nofollow' : 'index, follow'} />
         <title>{title}</title>
