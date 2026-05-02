@@ -1,0 +1,31 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+.wrangler/
+
+# Environment
+.env
+.dev.vars
+.env.local
+
+# Logs
+*.log
+npm-debug.log*
+.pm2/
+pids/
+logs/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+
+# Backups
+*.backup
+*.bak
+*.tar.gz

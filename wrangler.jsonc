@@ -1,0 +1,15 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "survey-huiskamerconcerten",
+  "compatibility_date": "2024-11-06",
+  "compatibility_flags": ["nodejs_compat"],
+  "pages_build_output_dir": "./dist",
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "huiskamerconcerten-prod",
+      "database_id": "bd91e651-bf1a-4c67-b66a-d7e239bdc398"
+    }
+  ],
+  "vars": {}
+}
