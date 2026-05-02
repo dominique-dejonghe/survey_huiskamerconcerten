@@ -45,10 +45,15 @@ function getClientIp(c: any): string {
     || '0.0.0.0'
 }
 
-// ============ PUBLIC ROUTES ============
-app.get('/', (c) => c.html(<SurveyPage />))
-app.get('/dank-je', (c) => c.html(<ThanksPage />))
-app.get('/privacy', (c) => c.html(<PrivacyPage />))
+// ============ PUBLIC ROUTES (NL = default) ============
+app.get('/', (c) => c.html(<SurveyPage lang="nl" />))
+app.get('/dank-je', (c) => c.html(<ThanksPage lang="nl" />))
+app.get('/privacy', (c) => c.html(<PrivacyPage lang="nl" />))
+// ============ PUBLIC ROUTES (EN) ============
+app.get('/en', (c) => c.html(<SurveyPage lang="en" />))
+app.get('/en/', (c) => c.redirect('/en'))
+app.get('/thank-you', (c) => c.html(<ThanksPage lang="en" />))
+app.get('/en/privacy', (c) => c.html(<PrivacyPage lang="en" />))
 app.get('/health', (c) => c.json({ ok: true, ts: new Date().toISOString() }))
 
 // ============ API: SUBMIT RESPONSE ============

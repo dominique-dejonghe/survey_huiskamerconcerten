@@ -1,12 +1,14 @@
 import type { FC } from 'hono/jsx'
+import { UI, type Lang } from '../lib/i18n'
 
-export const Layout: FC<{ title: string; children: any; admin?: boolean }> = ({ title, children, admin }) => {
+export const Layout: FC<{ title: string; children: any; admin?: boolean; lang?: Lang }> = ({ title, children, admin, lang = 'nl' }) => {
+  const t = UI[lang]
   return (
-    <html lang="nl">
+    <html lang={t.htmlLang}>
       <head>
         <meta charset="UTF-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
-        <meta name="description" content="Feedback voor de huiskamerconcerten Reeks I — Pensato.org" />
+        <meta name="description" content={t.metaDesc} />
         <meta name="theme-color" content="#1BA8B0" />
         <meta name="robots" content={admin ? 'noindex, nofollow' : 'index, follow'} />
         <title>{title}</title>

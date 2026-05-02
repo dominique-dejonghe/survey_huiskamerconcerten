@@ -9,17 +9,20 @@ Survey-website voor **Andre Devaere VZW**: feedback van gasten van zes huiskamer
 - **Naam**: Huiskamerconcerten Survey — Reeks I
 - **Opdrachtgever**: Dominique Dejonghe · Andre Devaere VZW · `dominique.dejonghe@iutum.be`
 - **Doel**: 20 vragen verzamelen van ~50-150 cultuurliefhebbers, anoniem tenzij contact wordt gewenst
-- **Taal**: 100 % Nederlands
+- **Talen**: Nederlands (default) + English (via `/en`); taalknop in header (🌐 NL · EN)
 - **Toon**: warm-persoonlijk, klassiek-elegant, niet corporate
 
 ## URLs
 
 | Type | URL |
 |------|-----|
-| **Productie (publiek)** | https://huiskamerconcerten-survey.pages.dev/ |
+| **Productie NL (publiek)** | https://huiskamerconcerten-survey.pages.dev/ |
+| **Productie EN (public)** | https://huiskamerconcerten-survey.pages.dev/en |
 | **Admin login** | https://huiskamerconcerten-survey.pages.dev/admin/login |
-| **Bedankpagina** | https://huiskamerconcerten-survey.pages.dev/dank-je |
-| **Privacy** | https://huiskamerconcerten-survey.pages.dev/privacy |
+| **Bedankpagina (NL)** | https://huiskamerconcerten-survey.pages.dev/dank-je |
+| **Thank-you page (EN)** | https://huiskamerconcerten-survey.pages.dev/thank-you |
+| **Privacy (NL)** | https://huiskamerconcerten-survey.pages.dev/privacy |
+| **Privacy (EN)** | https://huiskamerconcerten-survey.pages.dev/en/privacy |
 | **Health check** | https://huiskamerconcerten-survey.pages.dev/health |
 
 ### Admin credentials (productie)

@@ -5,6 +5,9 @@ export const responseSchema = z.object({
   // Honeypot — moet leeg zijn
   website: z.string().max(0).optional().or(z.literal('')),
 
+  // Taalcode (nl default)
+  lang: z.enum(['nl', 'en']).optional().default('nl'),
+
   q1_nps: z.number().int().min(0).max(10),
   q2_blijft_bij: z.string().max(2000).optional().nullable(),
   q3_aantal: z.enum(['1', '2', '3', '4', '5', 'alle 6']),

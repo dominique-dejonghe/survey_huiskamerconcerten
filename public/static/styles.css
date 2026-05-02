@@ -90,6 +90,15 @@ a:hover { color: var(--teal); }
   padding: 6px 4px;
 }
 .site-nav a:hover { color: var(--teal-dark); }
+.site-nav a.lang-switch {
+  font-style: normal; font-family: 'Lato', sans-serif; font-weight: 700;
+  font-size: 13px; letter-spacing: .04em;
+  border: 1px solid var(--border); border-radius: var(--radius-pill);
+  padding: 5px 12px; color: var(--ink); background: var(--cream);
+  display: inline-flex; align-items: center; gap: 6px;
+  min-height: 32px;
+}
+.site-nav a.lang-switch:hover { background: var(--teal); color: #fff; border-color: var(--teal); transform: translateY(-1px); }
 .nav-toggle { display: none; background: none; border: none; cursor: pointer; padding: 8px; min-width: 44px; min-height: 44px; }
 .nav-toggle svg { width: 24px; height: 24px; stroke: var(--ink); }
 

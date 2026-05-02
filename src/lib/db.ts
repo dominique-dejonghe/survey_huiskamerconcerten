@@ -7,6 +7,7 @@ export type ResponseRow = {
   submitted_at: string
   ip_hash: string | null
   user_agent: string | null
+  lang: string
   q1_nps: number
   q2_blijft_bij: string | null
   q3_aantal: string
@@ -39,7 +40,7 @@ export async function insertResponse(
   const id = uuid()
   await db.prepare(`
     INSERT INTO responses (
-      id, ip_hash, user_agent,
+      id, ip_hash, user_agent, lang,
       q1_nps, q2_blijft_bij, q3_aantal,
       q4_sfeer, q5_sfeer_open,
       q6_akoestiek, q7_fortepiano,
@@ -49,7 +50,7 @@ export async function insertResponse(
       q15_wensen_2, q16_gasten, q17_terugkomen, q18_overige,
       q19_naam, q20_contact, q20_email
     ) VALUES (
-      ?, ?, ?,
+      ?, ?, ?, ?,
       ?, ?, ?,
       ?, ?,
       ?, ?,
@@ -60,7 +61,7 @@ export async function insertResponse(
       ?, ?, ?
     )
   `).bind(
-    id, meta.ipHash, meta.userAgent,
+    id, meta.ipHash, meta.userAgent, data.lang || 'nl',
     data.q1_nps, nz(data.q2_blijft_bij), data.q3_aantal,
     data.q4_sfeer, nz(data.q5_sfeer_open),
     data.q6_akoestiek, nz(data.q7_fortepiano),

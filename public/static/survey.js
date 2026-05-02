@@ -1,12 +1,22 @@
-/* Survey client-side logic — vanilla JS, geen framework */
+/* Survey client-side logic — vanilla JS, geen framework, NL/EN aware */
 (function () {
   'use strict';
 
-  var REQUIRED_IDS = ['q1_nps','q3_aantal','q4_sfeer','q6_akoestiek','q8_repertiore','q10_interactie','q12_communic','q14_bijdrage'];
-  // typo guard — fix to actual id
-  REQUIRED_IDS = ['q1_nps','q3_aantal','q4_sfeer','q6_akoestiek','q8_repertoire','q10_interactie','q12_communic','q14_bijdrage'];
+  var I18N = window.SURVEY_I18N || {
+    lang: 'nl',
+    progressTpl: '__N__ van __T__ ingevuld',
+    submitting: 'Versturen…',
+    submit: 'Verstuur antwoorden',
+    rateLimit: 'Te veel pogingen — probeer later opnieuw.',
+    something: 'Er ging iets mis: ',
+    network: 'Netwerkfout: ',
+    unknown: 'onbekend',
+    thanksUrl: '/dank-je'
+  };
+
+  var REQUIRED_IDS = ['q1_nps','q3_aantal','q4_sfeer','q6_akoestiek','q8_repertoire','q10_interactie','q12_communic','q14_bijdrage'];
   var TOTAL_QUESTIONS = 20;
-  var STORAGE_KEY = 'survey_huiskamer_draft_v1';
+  var STORAGE_KEY = 'survey_huiskamer_draft_v1_' + I18N.lang;
 
   // ----- Hamburger menu -----
   var navToggle = document.getElementById('navToggle');
@@ -44,12 +54,12 @@
     var hidden = document.getElementById('input_' + qid);
     if (hidden) {
       hidden.value = String(val);
-      // mark scale or choice button selected
+      // Mark scale/choice button selected — match canonical via data-canon
       var btns = document.querySelectorAll('[data-q="' + qid + '"]');
       btns.forEach(function (b) {
-        if (b.getAttribute('data-v') === String(val)) b.classList.add('selected');
+        var canon = b.getAttribute('data-canon') || b.getAttribute('data-v');
+        if (String(canon) === String(val)) b.classList.add('selected');
       });
-      // Conditional email field
       if (qid === 'q20_contact') {
         var box = document.getElementById('cond_q20_email');
         if (box) box.style.display = String(val).toLowerCase() === 'ja' ? 'block' : 'none';
@@ -64,25 +74,24 @@
   document.querySelectorAll('.scale-btn, .scale5-btn, .choice-btn').forEach(function (btn) {
     btn.addEventListener('click', function () {
       var qid = btn.getAttribute('data-q');
-      var v = btn.getAttribute('data-v');
+      var displayV = btn.getAttribute('data-v');
+      var canonical = btn.getAttribute('data-canon') || displayV;
       // Deselect siblings
       document.querySelectorAll('[data-q="' + qid + '"]').forEach(function (s) {
         s.classList.remove('selected');
       });
       btn.classList.add('selected');
 
-      // Choice: store lowercase for ja/nee, raw otherwise
-      var stored = v;
-      if (qid === 'q20_contact') stored = v.toLowerCase();
+      // For q20_contact: lowercase canonical (ja/nee)
+      var stored = canonical;
+      if (qid === 'q20_contact') stored = String(canonical).toLowerCase();
       setValue(qid, stored);
 
-      // Conditional email field
       if (qid === 'q20_contact') {
         var box = document.getElementById('cond_q20_email');
         if (box) box.style.display = stored === 'ja' ? 'block' : 'none';
       }
 
-      // Clear error
       var card = btn.closest('.q-card');
       if (card) card.classList.remove('error', 'shake');
     });
@@ -91,6 +100,7 @@
   // ----- Free text inputs -----
   document.querySelectorAll('input[type="text"], input[type="email"], textarea').forEach(function (el) {
     if (el.classList.contains('honeypot')) return;
+    if (el.id === 'lang') return;
     if (el.id === 'input_q20_email' || el.id === 'q20_email') {
       el.addEventListener('input', function () { state[el.name || el.id] = el.value; persist(); updateProgress(); });
       return;
@@ -117,7 +127,11 @@
     var fill = document.getElementById('progressFill');
     var label = document.getElementById('progressLabel');
     if (fill) fill.style.width = pct + '%';
-    if (label) label.textContent = filled + ' van ' + TOTAL_QUESTIONS + ' ingevuld';
+    if (label) {
+      label.textContent = I18N.progressTpl
+        .replace('__N__', String(filled))
+        .replace('__T__', String(TOTAL_QUESTIONS));
+    }
   }
   updateProgress();
 
@@ -128,7 +142,6 @@
     form.addEventListener('submit', function (e) {
       e.preventDefault();
       var firstError = null;
-      // clear old errors
       document.querySelectorAll('.q-card.error').forEach(function (c) { c.classList.remove('error', 'shake'); });
 
       REQUIRED_IDS.forEach(function (qid) {
@@ -142,7 +155,6 @@
         }
       });
 
-      // Conditional: if q20_contact = ja, email must be valid
       if ((state.q20_contact || '').toLowerCase() === 'ja') {
         var emailEl = document.getElementById('q20_email');
         var em = emailEl ? emailEl.value.trim() : '';
@@ -161,9 +173,9 @@
         return;
       }
 
-      // Build payload
       var payload = {
         website: document.getElementById('website') ? document.getElementById('website').value : '',
+        lang: I18N.lang || 'nl',
         q1_nps: parseInt(state.q1_nps, 10),
         q2_blijft_bij: state.q2_blijft_bij || null,
         q3_aantal: state.q3_aantal,
@@ -190,7 +202,7 @@
       };
 
       submitBtn.disabled = true;
-      submitBtn.querySelector('span').textContent = 'Versturen…';
+      submitBtn.querySelector('span').textContent = I18N.submitting;
 
       fetch('/api/responses', {
         method: 'POST',
@@ -201,18 +213,18 @@
       }).then(function (res) {
         if (res.ok) {
           try { localStorage.removeItem(STORAGE_KEY); } catch (e) {}
-          window.location.href = '/dank-je';
+          window.location.href = I18N.thanksUrl;
         } else {
-          var msg = res.body && res.body.error ? res.body.error : 'onbekende fout';
-          if (res.status === 429) msg = 'Te veel pogingen — probeer later opnieuw.';
-          alert('Er ging iets mis: ' + msg);
+          var msg = res.body && res.body.error ? res.body.error : I18N.unknown;
+          if (res.status === 429) msg = I18N.rateLimit;
+          alert(I18N.something + msg);
           submitBtn.disabled = false;
-          submitBtn.querySelector('span').textContent = 'Verstuur antwoorden';
+          submitBtn.querySelector('span').textContent = I18N.submit;
         }
       }).catch(function (err) {
-        alert('Netwerkfout: ' + (err && err.message ? err.message : 'onbekend'));
+        alert(I18N.network + (err && err.message ? err.message : I18N.unknown));
         submitBtn.disabled = false;
-        submitBtn.querySelector('span').textContent = 'Verstuur antwoorden';
+        submitBtn.querySelector('span').textContent = I18N.submit;
       });
     });
   }
