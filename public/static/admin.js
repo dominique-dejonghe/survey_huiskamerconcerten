@@ -526,14 +526,28 @@
       // Switch body to pdf mode for hiding non-print elements
       document.body.classList.add('pdf-rendering');
 
+      // Tag specific sections with page-break-before so the report has a clean
+      // logical structure: Cover | KPI+Scores | NPS+Attendance | AI analysis | Open answers | Raw data.
+      // The cover already has page-break-after via the `after` selector above.
+      var sections = main.querySelectorAll('.admin-section');
+      var pageBreakTargets = []; // remember to clean up later
+      // Section indices: 0=Scores, 1=NPS, 2=Attendance, 3=AI, 4=Open answers, 5=Raw data
+      [1, 3, 4, 5].forEach(function (idx) {
+        var s = sections[idx];
+        if (s) { s.classList.add('pdf-page-break-before'); pageBreakTargets.push(s); }
+      });
+      // Group KPI grid + first chart together (they belong on same page)
+      var kpiGrid = main.querySelector('.kpi-grid');
+      if (kpiGrid) { kpiGrid.classList.add('pdf-keep-together'); pageBreakTargets.push(kpiGrid); }
+
       // Filename
       var d = new Date();
       var iso = d.toISOString().slice(0, 10);
       var fname = 'huiskamerconcerten-rapport-' + iso + '.pdf';
 
       // A4 landscape = 297mm x 210mm. With 10mm side margins, content area = 277mm.
-      // Render at 1400px wide so html2canvas captures the full dashboard layout
-      // and html2pdf scales it down to fit the page width.
+      // Render at 1100px wide (matches admin-main natural width) so the canvas
+      // doesn't include big empty side strips and scales 1:1 onto the page.
       var opt = {
         margin:       [10, 10, 12, 10], // mm: top, right, bottom, left
         filename:     fname,
@@ -542,27 +556,34 @@
           scale: 2,
           useCORS: true,
           backgroundColor: '#FBF8F2',
-          windowWidth: 1400,
-          width: 1400,
+          windowWidth: 1100,
+          width: 1100,
           scrollX: 0,
           scrollY: 0
         },
         jsPDF:        { unit: 'mm', format: 'a4', orientation: 'landscape', compress: true },
-        pagebreak:    { mode: ['avoid-all', 'css', 'legacy'] }
+        // Use CSS page-break rules + per-element selectors instead of avoid-all
+        // (avoid-all forces every element onto its own line which leaves big gaps).
+        pagebreak:    {
+          mode:   ['css', 'legacy'],
+          before: ['.pdf-page-break-before'],
+          after:  ['.pdf-cover'],
+          avoid:  ['.pdf-keep-together', '.kpi-card', '.ai-summary', '.ai-block', '.ai-list li', '.ai-quote', 'tr', 'thead']
+        }
       };
 
-      return html2pdf().set(opt).from(main).save()
-        .then(function () {
-          document.body.classList.remove('pdf-rendering');
-          if (cover.parentNode) cover.parentNode.removeChild(cover);
-          hideOverlay();
-        })
-        .catch(function (e) {
-          document.body.classList.remove('pdf-rendering');
-          if (cover.parentNode) cover.parentNode.removeChild(cover);
-          hideOverlay();
-          throw e;
+      function cleanup() {
+        document.body.classList.remove('pdf-rendering');
+        if (cover.parentNode) cover.parentNode.removeChild(cover);
+        pageBreakTargets.forEach(function (el) {
+          el.classList.remove('pdf-page-break-before');
+          el.classList.remove('pdf-keep-together');
         });
+      }
+
+      return html2pdf().set(opt).from(main).save()
+        .then(function () { cleanup(); hideOverlay(); })
+        .catch(function (e) { cleanup(); hideOverlay(); throw e; });
     }).catch(function (e) {
       hideOverlay();
       alert('PDF mislukt: ' + (e && e.message ? e.message : e));
