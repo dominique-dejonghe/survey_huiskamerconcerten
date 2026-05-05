@@ -531,12 +531,23 @@
       var iso = d.toISOString().slice(0, 10);
       var fname = 'huiskamerconcerten-rapport-' + iso + '.pdf';
 
+      // A4 landscape = 297mm x 210mm. With 10mm side margins, content area = 277mm.
+      // Render at 1400px wide so html2canvas captures the full dashboard layout
+      // and html2pdf scales it down to fit the page width.
       var opt = {
-        margin:       [12, 10, 14, 10], // mm: top, right, bottom, left
+        margin:       [10, 10, 12, 10], // mm: top, right, bottom, left
         filename:     fname,
         image:        { type: 'jpeg', quality: 0.95 },
-        html2canvas:  { scale: 2, useCORS: true, backgroundColor: '#FBF8F2', windowWidth: 1100 },
-        jsPDF:        { unit: 'mm', format: 'a4', orientation: 'portrait' },
+        html2canvas:  {
+          scale: 2,
+          useCORS: true,
+          backgroundColor: '#FBF8F2',
+          windowWidth: 1400,
+          width: 1400,
+          scrollX: 0,
+          scrollY: 0
+        },
+        jsPDF:        { unit: 'mm', format: 'a4', orientation: 'landscape', compress: true },
         pagebreak:    { mode: ['avoid-all', 'css', 'legacy'] }
       };
 

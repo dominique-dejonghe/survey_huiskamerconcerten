@@ -773,19 +773,28 @@ input:-webkit-autofill:focus {
 }
 @keyframes spin { to { transform: rotate(360deg); } }
 
-/* ===== PDF render helpers (used while html2pdf snapshots) ===== */
+/* ===== PDF render helpers (used while html2pdf snapshots, landscape A4) ===== */
 body.pdf-rendering .no-print,
 body.pdf-rendering .modal-backdrop { display: none !important; }
 body.pdf-rendering .admin-section { page-break-inside: avoid; box-shadow: none; }
-body.pdf-rendering .admin-main { max-width: 100% !important; padding: 0 !important; }
+/* Force the dashboard to render at the html2canvas capture width so layout is not clipped */
+body.pdf-rendering .admin-main {
+  max-width: 1400px !important;
+  width: 1400px !important;
+  padding: 0 24px !important;
+  margin: 0 auto !important;
+}
+/* Slightly tighten heavy elements so charts breathe in landscape */
+body.pdf-rendering .admin-section { margin-bottom: 16px !important; }
+body.pdf-rendering .charts-grid { gap: 16px !important; }
 
-/* PDF cover page (only visible during PDF rendering) */
+/* PDF cover page (only visible during PDF rendering, sized for A4 landscape) */
 .pdf-cover { display: none; }
 body.pdf-rendering .pdf-cover {
   display: flex; flex-direction: column; justify-content: center; align-items: center;
   text-align: center;
-  min-height: 260mm;
-  padding: 40mm 30mm;
+  min-height: 180mm;          /* A4 landscape inner height ~ 186mm with margins */
+  padding: 24mm 40mm;
   page-break-after: always;
   background: linear-gradient(180deg, var(--cream) 0%, var(--paper) 100%);
   border: none;
