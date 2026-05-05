@@ -236,19 +236,40 @@ a:hover { color: var(--teal); }
 .q-card.error .q-error-msg { display: block; }
 
 /* ===== Inputs ===== */
-input[type="text"], input[type="email"], textarea {
-  width: 100%; padding: 12px 14px;
+input[type="text"], input[type="email"], input[type="password"], textarea {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 12px 14px;
   border: 1px solid var(--border); border-radius: 8px;
   background: var(--paper); color: var(--ink);
   font-family: 'Lato', sans-serif; font-size: 16px; /* 16px voorkomt iOS zoom */
-  transition: border-color .2s, box-shadow .2s;
+  line-height: 1.4;
+  transition: border-color .2s, box-shadow .2s, background-color .2s;
   -webkit-appearance: none;
+  appearance: none;
 }
-input[type="text"]:focus, input[type="email"]:focus, textarea:focus {
+input[type="text"]:focus, input[type="email"]:focus, input[type="password"]:focus, textarea:focus {
   outline: none; border-color: var(--teal);
   box-shadow: 0 0 0 3px rgba(27,168,176,.15);
+  background: #fff;
 }
 textarea { min-height: 100px; resize: vertical; line-height: 1.5; }
+
+/* Neutralise browser autofill (Chrome/Safari yellow + 1Password/Bitwarden overlays) */
+input:-webkit-autofill,
+input:-webkit-autofill:hover,
+input:-webkit-autofill:focus,
+input:-webkit-autofill:active {
+  -webkit-text-fill-color: var(--ink);
+  -webkit-box-shadow: 0 0 0 1000px var(--paper) inset;
+  box-shadow: 0 0 0 1000px var(--paper) inset;
+  caret-color: var(--ink);
+  transition: background-color 9999s ease-out, color 9999s ease-out;
+}
+input:-webkit-autofill:focus {
+  -webkit-box-shadow: 0 0 0 1000px #fff inset, 0 0 0 3px rgba(27,168,176,.15);
+  box-shadow: 0 0 0 1000px #fff inset, 0 0 0 3px rgba(27,168,176,.15);
+}
 
 /* ===== NPS scale 0-10 ===== */
 .scale-row {
@@ -598,17 +619,48 @@ textarea { min-height: 100px; resize: vertical; line-height: 1.5; }
   font-family: 'Playfair Display', serif; font-style: italic;
   color: var(--ink-soft); margin-bottom: 24px; font-size: 14px;
 }
+.login-card .field { margin: 16px 0 0; }
 .login-card label {
   display: block; font-size: 13px; color: var(--ink-soft);
   font-family: 'Playfair Display', serif; font-style: italic;
-  margin: 14px 0 4px;
+  margin: 0 0 6px;
+}
+.login-card input[type="email"],
+.login-card input[type="password"] {
+  display: block;
+  width: 100%;
+  height: 48px;
+  padding: 12px 14px;
+  background: var(--paper);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-family: 'Lato', sans-serif;
+  font-size: 16px;
+  line-height: 1.4;
+  color: var(--ink);
+  -webkit-appearance: none;
+  appearance: none;
+  box-sizing: border-box;
+}
+.login-card input[type="email"]:focus,
+.login-card input[type="password"]:focus {
+  outline: none;
+  border-color: var(--teal);
+  background: #fff;
+  box-shadow: 0 0 0 3px rgba(27,168,176,.15);
 }
 .login-card .err {
   background: rgba(183,50,41,.08); border: 1px solid var(--red);
   color: var(--red); padding: 10px 14px; border-radius: 8px;
   margin-bottom: 16px; font-size: 14px;
 }
-.login-card .btn { width: 100%; justify-content: center; margin-top: 18px; }
+.login-card .btn { width: 100%; justify-content: center; margin-top: 22px; }
+.login-card .back-link {
+  display: block; text-align: center; margin-top: 18px;
+  font-family: 'Playfair Display', serif; font-style: italic;
+  font-size: 14px; color: var(--ink-soft); text-decoration: none;
+}
+.login-card .back-link:hover { color: var(--teal-dark); }
 
 /* Print */
 @media print {

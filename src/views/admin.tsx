@@ -7,18 +7,36 @@ export const LoginPage: FC<{ error?: string }> = ({ error }) => (
       <div class="login-card">
         <span class="badge badge-teal italic-serif">Admin</span>
         <h1>Welkom terug</h1>
-        <p class="sub">Andre Devaere VZW — Reeks I dashboard</p>
+        <p class="sub">Pensato.org — Reeks I dashboard</p>
         {error ? <div class="err">{error}</div> : null}
-        <form method="POST" action="/admin/login">
-          <label for="email">E-mailadres</label>
-          <input type="email" id="email" name="email" required autocomplete="email" />
-          <label for="password">Wachtwoord</label>
-          <input type="password" id="password" name="password" required autocomplete="current-password" />
+        <form method="POST" action="/admin/login" autocomplete="on">
+          <div class="field">
+            <label for="email">E-mailadres</label>
+            <input
+              type="email"
+              id="email"
+              name="email"
+              required
+              autocomplete="username"
+              autocapitalize="off"
+              spellcheck={false}
+              placeholder="naam@voorbeeld.be"
+            />
+          </div>
+          <div class="field">
+            <label for="password">Wachtwoord</label>
+            <input
+              type="password"
+              id="password"
+              name="password"
+              required
+              autocomplete="current-password"
+              placeholder="••••••••"
+            />
+          </div>
           <button type="submit" class="btn">Inloggen</button>
         </form>
-        <p style="margin-top:24px;font-size:12px;color:#888;text-align:center;">
-          <a href="/" style="color:#888;">← terug naar de vragenlijst</a>
-        </p>
+        <a href="/" class="back-link">← terug naar de vragenlijst</a>
       </div>
     </div>
   </Layout>
