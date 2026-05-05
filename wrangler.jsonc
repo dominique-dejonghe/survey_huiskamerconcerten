@@ -11,5 +11,8 @@
       "database_id": "bd91e651-bf1a-4c67-b66a-d7e239bdc398"
     }
   ],
+  "ai": {
+    "binding": "AI"
+  },
   "vars": {}
 }

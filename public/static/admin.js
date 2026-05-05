@@ -258,4 +258,305 @@
 
   loadData();
   setInterval(loadData, 30000);
+
+  // ============================================================
+  // ===== AI ANALYSIS SECTION ===================================
+  // ============================================================
+  var aiState = { lang: 'nl', payload: null, generating: false };
+
+  var aiContent  = document.getElementById('aiContent');
+  var aiMeta     = document.getElementById('aiMeta');
+  var aiRefresh  = document.getElementById('aiRefreshBtn');
+  var aiLangBtns = document.querySelectorAll('.ai-lang-btn');
+
+  var AI_TEXTS = {
+    nl: {
+      empty:    'Klik op "Genereer analyse" om de eerste analyse te starten.',
+      generate: '✨ Genereer AI-analyse',
+      hint:     'Llama 3.3 (Cloudflare Workers AI) leest alle responses en formuleert sterktes, verbeterpunten en concrete suggesties voor Reeks II. Resultaat wordt 24u gecached.',
+      loading:  'AI genereert de analyse… dit kan 20-40 seconden duren.',
+      meta:     function (n, dt, cached) { return 'Op basis van ' + n + ' responses · gegenereerd ' + dt + (cached ? ' · uit cache' : ' · vers'); },
+      summary:  'Samenvatting',
+      strong:   'Sterke punten',
+      improve:  'Verbeterpunten',
+      suggest:  'Suggesties voor Reeks II',
+      quotes:   'Onderbouwende citaten',
+      noData:   'Nog geen responses om te analyseren.',
+      error:    'Analyse mislukt: ',
+      refreshTitle: 'Genereer een nieuwe analyse'
+    },
+    en: {
+      empty:    'Click "Generate analysis" to run the first analysis.',
+      generate: '✨ Generate AI analysis',
+      hint:     'Llama 3.3 (Cloudflare Workers AI) reads all responses and formulates strengths, areas for improvement and concrete suggestions for Series II. Cached for 24 hours.',
+      loading:  'AI is generating the analysis… this can take 20-40 seconds.',
+      meta:     function (n, dt, cached) { return 'Based on ' + n + ' responses · generated ' + dt + (cached ? ' · from cache' : ' · fresh'); },
+      summary:  'Summary',
+      strong:   'Strengths',
+      improve:  'Areas for improvement',
+      suggest:  'Suggestions for Series II',
+      quotes:   'Supporting quotes',
+      noData:   'No responses to analyse yet.',
+      error:    'Analysis failed: ',
+      refreshTitle: 'Generate a new analysis'
+    }
+  };
+
+  function aiT() { return AI_TEXTS[aiState.lang]; }
+
+  function fmtDate(s) {
+    if (!s) return '';
+    var d = new Date(s.replace(' ', 'T') + (s.indexOf('Z') === -1 && s.indexOf('+') === -1 ? 'Z' : ''));
+    if (isNaN(d.getTime())) return s;
+    return d.toLocaleDateString(aiState.lang === 'nl' ? 'nl-BE' : 'en-GB', { day: '2-digit', month: 'long', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+  }
+
+  function escapeHtml(s) { return String(s == null ? '' : s).replace(/[&<>"]/g, function (c) { return ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;' })[c]; }); }
+
+  function renderEmpty() {
+    aiContent.innerHTML =
+      '<div class="ai-empty">' +
+        '<button type="button" id="aiGenerateBtn" class="btn btn-teal">' + aiT().generate + '</button>' +
+        '<p class="ai-hint">' + aiT().hint + '</p>' +
+      '</div>';
+    aiMeta.textContent = aiT().empty;
+    var btn = document.getElementById('aiGenerateBtn');
+    if (btn) btn.addEventListener('click', function () { generate(false); });
+  }
+
+  function renderLoading() {
+    aiContent.innerHTML =
+      '<div class="ai-loading">' +
+        '<div class="pdf-spinner" aria-hidden="true"></div>' +
+        '<span>' + aiT().loading + '</span>' +
+      '</div>';
+    aiMeta.textContent = '';
+  }
+
+  function renderError(msg) {
+    aiContent.innerHTML = '<div class="ai-error">' + escapeHtml(aiT().error + msg) + '</div>';
+  }
+
+  function renderAnalysis(payload, fromCache) {
+    if (!payload) return renderEmpty();
+    var html = '';
+
+    if (payload.samenvatting) {
+      html += '<div class="ai-summary"><h3 style="margin:0 0 10px;font-family:\'Playfair Display\',serif;font-style:italic;color:var(--teal-dark);font-size:18px;">' + escapeHtml(aiT().summary) + '</h3>' +
+              '<p style="margin:0;">' + escapeHtml(payload.samenvatting) + '</p></div>';
+    }
+
+    function listBlock(cls, title, arr, titleKey, evidenceKey) {
+      if (!arr || !arr.length) return '';
+      var s = '<div class="ai-block ' + cls + '"><h3>' + escapeHtml(title) + '</h3><ul class="ai-list">';
+      arr.forEach(function (it) {
+        s += '<li>' +
+               '<span class="ai-title">' + escapeHtml(it[titleKey] || '') + '</span>' +
+               '<span class="ai-evidence">' + escapeHtml(it[evidenceKey] || '') + '</span>' +
+             '</li>';
+      });
+      s += '</ul></div>';
+      return s;
+    }
+
+    html += listBlock('ai-strong',  aiT().strong,  payload.sterke_punten,     'punt',  'bewijs');
+    html += listBlock('ai-improve', aiT().improve, payload.verbeterpunten,    'punt',  'bewijs');
+    html += listBlock('ai-suggest', aiT().suggest, payload.suggesties_reeks2, 'titel', 'beschrijving');
+
+    if (payload.citaten && payload.citaten.length) {
+      html += '<div class="ai-block ai-quotes"><h3>' + escapeHtml(aiT().quotes) + '</h3>';
+      payload.citaten.forEach(function (q) {
+        var cls = q.sentiment === 'positief' ? 'pos' : (q.sentiment === 'kritisch' ? 'neg' : 'neu');
+        html += '<div class="ai-quote ' + cls + '">' +
+                  '"' + escapeHtml(q.tekst) + '"' +
+                  '<span class="ai-quote-meta">' + escapeHtml(q.vraag || '') + ' · ' + escapeHtml(q.sentiment || '') + '</span>' +
+                '</div>';
+      });
+      html += '</div>';
+    }
+
+    aiContent.innerHTML = html || '<p>—</p>';
+    aiMeta.textContent = aiT().meta(payload.response_count || 0, fmtDate(payload.generated_at), !!fromCache);
+  }
+
+  function generate(force) {
+    if (aiState.generating) return;
+    if (!state.responses || state.responses.length === 0) {
+      aiMeta.textContent = aiT().noData;
+      renderEmpty();
+      return;
+    }
+    aiState.generating = true;
+    renderLoading();
+    var url = '/api/admin/analyze?lang=' + aiState.lang + (force ? '&force=1' : '');
+    fetch(url, { method: 'POST', credentials: 'same-origin' })
+      .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, status: r.status, body: j }; }); })
+      .then(function (res) {
+        aiState.generating = false;
+        if (!res.ok || !res.body || !res.body.analysis) {
+          renderError((res.body && (res.body.message || res.body.error)) || ('HTTP ' + res.status));
+          return;
+        }
+        aiState.payload = res.body.analysis;
+        renderAnalysis(res.body.analysis, !!res.body.cached);
+      })
+      .catch(function (err) {
+        aiState.generating = false;
+        renderError(err && err.message ? err.message : 'network error');
+      });
+  }
+
+  function loadCached() {
+    fetch('/api/admin/analyze?lang=' + aiState.lang, { credentials: 'same-origin' })
+      .then(function (r) { return r.json(); })
+      .then(function (j) {
+        if (j && j.analysis) {
+          aiState.payload = j.analysis;
+          renderAnalysis(j.analysis, true);
+        } else {
+          aiState.payload = null;
+          renderEmpty();
+        }
+      })
+      .catch(function () { renderEmpty(); });
+  }
+
+  aiLangBtns.forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      var lang = btn.getAttribute('data-lang');
+      if (lang === aiState.lang) return;
+      aiLangBtns.forEach(function (b) { b.classList.toggle('active', b === btn); });
+      aiState.lang = lang;
+      loadCached();
+    });
+  });
+
+  if (aiRefresh) {
+    aiRefresh.title = aiT().refreshTitle;
+    aiRefresh.addEventListener('click', function () { generate(true); });
+  }
+
+  // initial cached load (after a short delay to let main data load first)
+  setTimeout(loadCached, 800);
+
+  // ============================================================
+  // ===== PDF GENERATION =======================================
+  // ============================================================
+  var pdfBtn     = document.getElementById('pdfBtn');
+  var pdfOverlay = document.getElementById('pdfOverlay');
+  var pdfMsg     = document.getElementById('pdfOverlayMsg');
+
+  function showOverlay(msg) {
+    if (!pdfOverlay) return;
+    pdfMsg.textContent = msg || 'PDF wordt gegenereerd…';
+    pdfOverlay.hidden = false;
+  }
+  function hideOverlay() { if (pdfOverlay) pdfOverlay.hidden = true; }
+
+  function loadHtml2Pdf() {
+    if (window.html2pdf) return Promise.resolve(window.html2pdf);
+    return new Promise(function (resolve, reject) {
+      var s = document.createElement('script');
+      s.src = 'https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.2/html2pdf.bundle.min.js';
+      s.onload = function () { resolve(window.html2pdf); };
+      s.onerror = function () { reject(new Error('Kon html2pdf.js niet laden')); };
+      document.head.appendChild(s);
+    });
+  }
+
+  function buildCoverNode() {
+    var n = state.responses ? state.responses.length : 0;
+    var nps = (state.stats && state.stats.nps) ? state.stats.nps.score : 0;
+    var d = new Date();
+    var dateStr = d.toLocaleDateString('nl-BE', { day: '2-digit', month: 'long', year: 'numeric' });
+    var lang = aiState.lang;
+    var title = lang === 'en' ? 'Survey report — Series I' : 'Surveyrapport — Reeks I';
+    var sub   = lang === 'en' ? 'House concerts · Jos van Immerseel & Ayako Ito' : 'Huiskamerconcerten · Jos van Immerseel & Ayako Ito';
+    var lblResp = lang === 'en' ? 'Responses' : 'Responses';
+    var lblNps  = 'NPS';
+    var lblDate = lang === 'en' ? 'Date' : 'Datum';
+    var div = document.createElement('section');
+    div.className = 'pdf-cover';
+    div.innerHTML =
+      '<span class="pdf-cover-badge italic-serif">Pensato.org</span>' +
+      '<h1>' + escapeHtml(title) + '</h1>' +
+      '<p class="pdf-cover-sub">' + escapeHtml(sub) + '</p>' +
+      '<div class="pdf-cover-meta">' +
+        '<div><strong>' + n + '</strong>' + escapeHtml(lblResp) + '</div>' +
+        '<div><strong>' + nps + '</strong>' + escapeHtml(lblNps) + '</div>' +
+        '<div><strong>' + escapeHtml(dateStr) + '</strong>' + escapeHtml(lblDate) + '</div>' +
+      '</div>' +
+      '<p class="pdf-cover-credit">' + escapeHtml(lang === 'en' ? 'Generated by the Pensato.org survey dashboard' : 'Gegenereerd door het Pensato.org surveydashboard') + '</p>';
+    return div;
+  }
+
+  function generatePdf() {
+    if (!state.responses) { alert('Nog geen data geladen.'); return; }
+
+    showOverlay('PDF wordt gegenereerd…');
+
+    var ensureAnalysis = aiState.payload
+      ? Promise.resolve()
+      : new Promise(function (resolve) {
+          showOverlay('AI-analyse wordt gegenereerd…');
+          fetch('/api/admin/analyze?lang=' + aiState.lang, { method: 'POST', credentials: 'same-origin' })
+            .then(function (r) { return r.json(); })
+            .then(function (j) {
+              if (j && j.analysis) {
+                aiState.payload = j.analysis;
+                renderAnalysis(j.analysis, !!j.cached);
+              }
+              resolve();
+            })
+            .catch(function () { resolve(); });
+        });
+
+    ensureAnalysis.then(function () {
+      return loadHtml2Pdf();
+    }).then(function (html2pdf) {
+      showOverlay('PDF wordt gerenderd…');
+
+      var main = document.querySelector('.admin-main');
+      if (!main) throw new Error('admin-main niet gevonden');
+
+      // Insert cover at top
+      var cover = buildCoverNode();
+      main.insertBefore(cover, main.firstChild);
+
+      // Switch body to pdf mode for hiding non-print elements
+      document.body.classList.add('pdf-rendering');
+
+      // Filename
+      var d = new Date();
+      var iso = d.toISOString().slice(0, 10);
+      var fname = 'huiskamerconcerten-rapport-' + iso + '.pdf';
+
+      var opt = {
+        margin:       [12, 10, 14, 10], // mm: top, right, bottom, left
+        filename:     fname,
+        image:        { type: 'jpeg', quality: 0.95 },
+        html2canvas:  { scale: 2, useCORS: true, backgroundColor: '#FBF8F2', windowWidth: 1100 },
+        jsPDF:        { unit: 'mm', format: 'a4', orientation: 'portrait' },
+        pagebreak:    { mode: ['avoid-all', 'css', 'legacy'] }
+      };
+
+      return html2pdf().set(opt).from(main).save()
+        .then(function () {
+          document.body.classList.remove('pdf-rendering');
+          if (cover.parentNode) cover.parentNode.removeChild(cover);
+          hideOverlay();
+        })
+        .catch(function (e) {
+          document.body.classList.remove('pdf-rendering');
+          if (cover.parentNode) cover.parentNode.removeChild(cover);
+          hideOverlay();
+          throw e;
+        });
+    }).catch(function (e) {
+      hideOverlay();
+      alert('PDF mislukt: ' + (e && e.message ? e.message : e));
+    });
+  }
+
+  if (pdfBtn) pdfBtn.addEventListener('click', generatePdf);
 })();

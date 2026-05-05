@@ -7,6 +7,7 @@ const SESSION_DURATION = 60 * 60 * 8 // 8h
 
 export type Bindings = {
   DB: D1Database
+  AI: any // Cloudflare Workers AI binding (Ai type)
   ADMIN_EMAIL: string
   ADMIN_PASSWORD: string
   SESSION_SECRET: string

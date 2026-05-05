@@ -1,6 +1,5 @@
 import { Hono } from 'hono'
 import { cors } from 'hono/cors'
-import { secureHeaders } from 'hono/secure-headers'
 import { logger } from 'hono/logger'
 
 import { SurveyPage, ThanksPage, PrivacyPage } from './views/survey'
@@ -19,22 +18,47 @@ import {
   requireAdmin, checkAdminCredentials,
 } from './lib/auth'
 import { sendNewResponseNotification } from './lib/email'
+import {
+  generateAnalysis, getCachedAnalysis, saveCachedAnalysis, clearCachedAnalysis,
+  type AnalysisResult,
+} from './lib/ai'
+import type { Lang } from './lib/i18n'
 
 const app = new Hono<{ Bindings: Bindings }>()
 
 app.use('*', logger())
-app.use('*', secureHeaders({
-  contentSecurityPolicy: {
-    defaultSrc: ["'self'"],
-    scriptSrc: ["'self'"],
-    styleSrc: ["'self'", "'unsafe-inline'", 'https://fonts.googleapis.com'],
-    fontSrc: ["'self'", 'https://fonts.gstatic.com'],
-    imgSrc: ["'self'", 'data:'],
-    connectSrc: ["'self'"],
-    frameAncestors: ["'none'"],
-  },
-  referrerPolicy: 'strict-origin-when-cross-origin',
-}))
+
+// Stricter CSP for public routes
+app.use('*', async (c, next) => {
+  const path = c.req.path
+  const isAdmin = path.startsWith('/admin') || path.startsWith('/api/admin')
+  const csp = isAdmin
+    // Admin: allow html2pdf bundle from cdnjs + inline styles/scripts/data-URIs needed by html2canvas
+    ? [
+        "default-src 'self'",
+        "script-src 'self' 'unsafe-inline' https://cdnjs.cloudflare.com",
+        "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
+        "font-src 'self' https://fonts.gstatic.com data:",
+        "img-src 'self' data: blob:",
+        "connect-src 'self'",
+        "frame-ancestors 'none'",
+      ].join('; ')
+    : [
+        "default-src 'self'",
+        "script-src 'self' 'unsafe-inline'",
+        "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
+        "font-src 'self' https://fonts.gstatic.com",
+        "img-src 'self' data:",
+        "connect-src 'self'",
+        "frame-ancestors 'none'",
+      ].join('; ')
+  c.header('Content-Security-Policy', csp)
+  c.header('Referrer-Policy', 'strict-origin-when-cross-origin')
+  c.header('X-Content-Type-Options', 'nosniff')
+  c.header('X-Frame-Options', 'DENY')
+  c.header('Strict-Transport-Security', 'max-age=31536000; includeSubDomains')
+  await next()
+})
 app.use('/api/*', cors({ origin: (o) => o ?? '*', credentials: true }))
 
 // ----- Helpers -----
@@ -193,6 +217,56 @@ app.delete('/api/admin/responses/:id', async (c) => {
   const ip = getClientIp(c)
   const ipHash = await hashIp(ip, c.env.IP_HASH_SALT || 'dev')
   await logAudit(c.env.DB, 'delete_response', ipHash, { id })
+  return c.json({ ok: true })
+})
+
+// ============ API: AI ANALYSIS ============
+// GET  → returns cached analysis (or 404 if none)
+// POST → forces a fresh generation (and caches it)
+app.get('/api/admin/analyze', async (c) => {
+  const guard = await requireAdmin(c)
+  if (guard) return guard
+  const lang: Lang = c.req.query('lang') === 'en' ? 'en' : 'nl'
+  const cached = await getCachedAnalysis(c.env.DB, lang)
+  if (!cached) return c.json({ cached: false, analysis: null }, 200)
+  return c.json({ cached: true, analysis: cached })
+})
+
+app.post('/api/admin/analyze', async (c) => {
+  const guard = await requireAdmin(c)
+  if (guard) return guard
+  const lang: Lang = c.req.query('lang') === 'en' ? 'en' : 'nl'
+  const force = c.req.query('force') === '1'
+
+  if (!force) {
+    const cached = await getCachedAnalysis(c.env.DB, lang)
+    if (cached) return c.json({ cached: true, analysis: cached })
+  }
+
+  const rows = await listResponses(c.env.DB)
+  if (rows.length === 0) {
+    return c.json({ error: 'no_data', message: 'Geen responses om te analyseren.' }, 400)
+  }
+
+  const ip = getClientIp(c)
+  const ipHash = await hashIp(ip, c.env.IP_HASH_SALT || 'dev')
+  try {
+    const result = await generateAnalysis({ AI: c.env.AI, DB: c.env.DB }, rows, lang)
+    await saveCachedAnalysis(c.env.DB, lang, result)
+    await logAudit(c.env.DB, 'ai_analyze', ipHash, { lang, count: rows.length })
+    return c.json({ cached: false, analysis: result })
+  } catch (e: any) {
+    console.error('AI analyze error:', e)
+    await logAudit(c.env.DB, 'ai_analyze_fail', ipHash, { lang, error: String(e?.message ?? e).slice(0, 300) })
+    return c.json({ error: 'ai_failed', message: e?.message ?? 'AI-analyse mislukt' }, 500)
+  }
+})
+
+app.delete('/api/admin/analyze', async (c) => {
+  const guard = await requireAdmin(c)
+  if (guard) return guard
+  const lang = c.req.query('lang') as Lang | undefined
+  await clearCachedAnalysis(c.env.DB, lang === 'nl' || lang === 'en' ? lang : undefined)
   return c.json({ ok: true })
 })
 

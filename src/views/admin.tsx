@@ -52,12 +52,12 @@ export const DashboardPage: FC = () => (
     </header>
 
     <main class="admin-main">
-      <div class="export-bar">
+      <div class="export-bar no-print">
         <span class="label">Export &amp; beheer:</span>
         <a href="/api/admin/export?format=csv" class="btn">⬇ Export CSV</a>
         <a href="/api/admin/export?format=json" class="btn btn-orange">⬇ Export JSON</a>
+        <button type="button" id="pdfBtn" class="btn btn-teal">📄 PDF rapport</button>
         <button type="button" id="deleteAllBtn" class="btn btn-red">🗑 Wis alle data</button>
-        <button type="button" id="printBtn" class="btn btn-ghost" onclick="window.print()">🖨 Print</button>
       </div>
 
       <div class="kpi-grid" id="kpiGrid"></div>
@@ -82,10 +82,30 @@ export const DashboardPage: FC = () => (
         <div id="attendanceChart"></div>
       </section>
 
+      <section class="admin-section ai-section" id="aiSection">
+        <div class="ai-section-header">
+          <h2>AI-analyse &amp; suggesties voor Reeks II</h2>
+          <div class="ai-controls no-print">
+            <div class="ai-lang-toggle" role="group" aria-label="Taal kiezen">
+              <button type="button" class="ai-lang-btn active" data-lang="nl">NL</button>
+              <button type="button" class="ai-lang-btn" data-lang="en">EN</button>
+            </div>
+            <button type="button" id="aiRefreshBtn" class="btn btn-ghost" title="Genereer een nieuwe analyse">↻ Vernieuwen</button>
+          </div>
+        </div>
+        <p class="ai-meta" id="aiMeta">Klik op "Genereer analyse" om de eerste analyse te starten.</p>
+        <div id="aiContent" class="ai-content">
+          <div class="ai-empty">
+            <button type="button" id="aiGenerateBtn" class="btn btn-teal">✨ Genereer AI-analyse</button>
+            <p class="ai-hint">Llama 3.3 (Cloudflare Workers AI) leest alle responses en formuleert sterktes, verbeterpunten en concrete suggesties voor Reeks II. Resultaat wordt 24u gecached.</p>
+          </div>
+        </div>
+      </section>
+
       <section class="admin-section">
         <h2>Open antwoorden</h2>
         <div class="tabs" id="openTabs"></div>
-        <input type="search" class="search-input" id="openSearch" placeholder="Zoek in antwoorden…" />
+        <input type="search" class="search-input no-print" id="openSearch" placeholder="Zoek in antwoorden…" />
         <div id="openContent"></div>
       </section>
 
@@ -112,13 +132,21 @@ export const DashboardPage: FC = () => (
         </div>
       </section>
 
-      <p style="text-align:center;color:#888;font-size:12px;margin-top:32px;">
-        <span class="italic-serif">Andre Devaere VZW</span> — automatisch ververst om de 30 seconden
+      <p class="no-print" style="text-align:center;color:#888;font-size:12px;margin-top:32px;">
+        <span class="italic-serif">Pensato.org</span> — automatisch ververst om de 30 seconden
       </p>
     </main>
 
-    <div class="modal-backdrop" id="modalBackdrop">
+    <div class="modal-backdrop no-print" id="modalBackdrop">
       <div class="modal" id="modalContent"></div>
+    </div>
+
+    {/* PDF generation overlay */}
+    <div id="pdfOverlay" class="pdf-overlay no-print" hidden>
+      <div class="pdf-overlay-card">
+        <div class="pdf-spinner" aria-hidden="true"></div>
+        <p id="pdfOverlayMsg">PDF wordt gegenereerd…</p>
+      </div>
     </div>
 
     <script src="/static/admin.js" defer></script>
