@@ -251,9 +251,18 @@ app.post('/api/admin/analyze', async (c) => {
   const ip = getClientIp(c)
   const ipHash = await hashIp(ip, c.env.IP_HASH_SALT || 'dev')
   try {
-    const result = await generateAnalysis({ AI: c.env.AI, DB: c.env.DB }, rows, lang)
+    const result = await generateAnalysis(
+      {
+        AI: c.env.AI,
+        DB: c.env.DB,
+        OPENAI_API_KEY: c.env.OPENAI_API_KEY,
+        OPENAI_MODEL: c.env.OPENAI_MODEL,
+      },
+      rows,
+      lang,
+    )
     await saveCachedAnalysis(c.env.DB, lang, result)
-    await logAudit(c.env.DB, 'ai_analyze', ipHash, { lang, count: rows.length })
+    await logAudit(c.env.DB, 'ai_analyze', ipHash, { lang, count: rows.length, provider: result.provider })
     return c.json({ cached: false, analysis: result })
   } catch (e: any) {
     console.error('AI analyze error:', e)

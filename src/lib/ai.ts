@@ -8,6 +8,7 @@ export type AnalysisResult = {
   generated_at: string
   response_count: number
   lang: Lang
+  provider?: string                        // 'openai:gpt-4o-mini' | 'workers-ai:llama-3.3' …
   samenvatting: string                     // 1-paragraph general tendency
   sterke_punten: { punt: string; bewijs: string }[]   // 3-5 items
   verbeterpunten: { punt: string; bewijs: string }[]  // 3-5 items
@@ -15,7 +16,12 @@ export type AnalysisResult = {
   citaten: { vraag: string; tekst: string; sentiment: 'positief' | 'neutraal' | 'kritisch' }[]
 }
 
-type Bindings = { AI: any; DB: D1Database }
+type Bindings = {
+  AI: any
+  DB: D1Database
+  OPENAI_API_KEY?: string
+  OPENAI_MODEL?: string
+}
 
 // ---- Build a compact, structured digest of all responses ----
 function buildDigest(rows: ResponseRow[]): string {
@@ -257,17 +263,47 @@ function repairTruncatedJson(s: string): string | null {
   return body
 }
 
-// ---- Main entry ----
-export async function generateAnalysis(
-  env: Bindings,
-  rows: ResponseRow[],
-  lang: Lang,
-): Promise<AnalysisResult> {
-  const digest = buildDigest(rows)
+// ---- Provider: OpenAI (primary, fast) ----
+async function callOpenAI(env: Bindings, lang: Lang, digest: string): Promise<{ json: any; provider: string }> {
+  const apiKey = env.OPENAI_API_KEY
+  if (!apiKey) throw new Error('OPENAI_API_KEY not configured')
+  const model = env.OPENAI_MODEL || 'gpt-4o-mini'
   const p = PROMPTS[lang]
 
-  // Llama 3.3 70B Instruct (fast variant for Workers AI)
-  // Fallback to 3.1 if 3.3 not available in account region.
+  const res = await fetch('https://api.openai.com/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${apiKey}`,
+    },
+    body: JSON.stringify({
+      model,
+      messages: [
+        { role: 'system', content: p.system },
+        { role: 'user',   content: p.user(digest) },
+      ],
+      response_format: { type: 'json_object' }, // forces valid JSON output
+      temperature: 0.3,
+      max_tokens: 4096,
+    }),
+  })
+
+  if (!res.ok) {
+    const errBody = await res.text().catch(() => '')
+    throw new Error(`OpenAI ${res.status}: ${errBody.slice(0, 300)}`)
+  }
+  const data: any = await res.json()
+  const content = data?.choices?.[0]?.message?.content ?? ''
+  const json = extractJson(content)
+  if (!json || typeof json !== 'object') {
+    throw new Error('OpenAI returned non-JSON content: ' + String(content).slice(0, 200))
+  }
+  return { json, provider: `openai:${model}` }
+}
+
+// ---- Provider: Cloudflare Workers AI (fallback, free) ----
+async function callWorkersAI(env: Bindings, lang: Lang, digest: string): Promise<{ json: any; provider: string }> {
+  const p = PROMPTS[lang]
   const models = ['@cf/meta/llama-3.3-70b-instruct-fp8-fast', '@cf/meta/llama-3.1-70b-instruct']
   let lastError: any = null
   for (const model of models) {
@@ -283,14 +319,41 @@ export async function generateAnalysis(
       const text: string = typeof result === 'string' ? result : (result?.response ?? result?.result ?? '')
       const json = extractJson(text)
       if (json && typeof json === 'object') {
-        return normalise(json, rows.length, lang)
+        return { json, provider: `workers-ai:${model.split('/').pop()}` }
       }
-      lastError = new Error('AI returned non-JSON output: ' + String(text).slice(0, 200))
+      lastError = new Error('Workers AI returned non-JSON output: ' + String(text).slice(0, 200))
     } catch (e: any) {
       lastError = e
     }
   }
-  throw lastError ?? new Error('AI analysis failed')
+  throw lastError ?? new Error('Workers AI failed')
+}
+
+// ---- Main entry: try OpenAI → fall back to Workers AI ----
+export async function generateAnalysis(
+  env: Bindings,
+  rows: ResponseRow[],
+  lang: Lang,
+): Promise<AnalysisResult> {
+  const digest = buildDigest(rows)
+
+  // Primary: OpenAI (fast, ~8s, costs ~€0.002 per call)
+  if (env.OPENAI_API_KEY) {
+    try {
+      const { json, provider } = await callOpenAI(env, lang, digest)
+      const result = normalise(json, rows.length, lang)
+      result.provider = provider
+      return result
+    } catch (e: any) {
+      console.warn('OpenAI failed, falling back to Workers AI:', e?.message ?? e)
+    }
+  }
+
+  // Fallback: Cloudflare Workers AI (free, ~90s)
+  const { json, provider } = await callWorkersAI(env, lang, digest)
+  const result = normalise(json, rows.length, lang)
+  result.provider = provider
+  return result
 }
 
 function normalise(j: any, count: number, lang: Lang): AnalysisResult {
@@ -299,6 +362,7 @@ function normalise(j: any, count: number, lang: Lang): AnalysisResult {
     generated_at: new Date().toISOString(),
     response_count: count,
     lang,
+    provider: '',
     samenvatting: typeof j.samenvatting === 'string' ? j.samenvatting : '',
     sterke_punten: arr(j.sterke_punten).map(x => ({
       punt: String(x?.punt ?? '').slice(0, 200),

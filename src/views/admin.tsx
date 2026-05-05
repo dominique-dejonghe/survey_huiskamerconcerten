@@ -97,7 +97,7 @@ export const DashboardPage: FC = () => (
         <div id="aiContent" class="ai-content">
           <div class="ai-empty">
             <button type="button" id="aiGenerateBtn" class="btn btn-teal">✨ Genereer AI-analyse</button>
-            <p class="ai-hint">Llama 3.3 (Cloudflare Workers AI) leest alle responses en formuleert sterktes, verbeterpunten en concrete suggesties voor Reeks II. Resultaat wordt 24u gecached.</p>
+            <p class="ai-hint">GPT-4o-mini (OpenAI) leest alle responses en formuleert sterktes, verbeterpunten en concrete suggesties voor Reeks II. Resultaat wordt 24u gecached.</p>
           </div>
         </div>
       </section>

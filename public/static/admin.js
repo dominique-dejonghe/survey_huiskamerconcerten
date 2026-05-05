@@ -273,9 +273,9 @@
     nl: {
       empty:    'Klik op "Genereer analyse" om de eerste analyse te starten.',
       generate: '✨ Genereer AI-analyse',
-      hint:     'Llama 3.3 (Cloudflare Workers AI) leest alle responses en formuleert sterktes, verbeterpunten en concrete suggesties voor Reeks II. Resultaat wordt 24u gecached.',
-      loading:  'AI genereert de analyse… dit kan 20-40 seconden duren.',
-      meta:     function (n, dt, cached) { return 'Op basis van ' + n + ' responses · gegenereerd ' + dt + (cached ? ' · uit cache' : ' · vers'); },
+      hint:     'GPT-4o-mini (OpenAI) leest alle responses en formuleert sterktes, verbeterpunten en concrete suggesties voor Reeks II. Resultaat wordt 24u gecached.',
+      loading:  'AI genereert de analyse… dit duurt ongeveer 8 seconden.',
+      meta:     function (n, dt, cached, provider) { return 'Op basis van ' + n + ' responses · gegenereerd ' + dt + (cached ? ' · uit cache' : ' · vers') + (provider ? ' · ' + provider : ''); },
       summary:  'Samenvatting',
       strong:   'Sterke punten',
       improve:  'Verbeterpunten',
@@ -288,9 +288,9 @@
     en: {
       empty:    'Click "Generate analysis" to run the first analysis.',
       generate: '✨ Generate AI analysis',
-      hint:     'Llama 3.3 (Cloudflare Workers AI) reads all responses and formulates strengths, areas for improvement and concrete suggestions for Series II. Cached for 24 hours.',
-      loading:  'AI is generating the analysis… this can take 20-40 seconds.',
-      meta:     function (n, dt, cached) { return 'Based on ' + n + ' responses · generated ' + dt + (cached ? ' · from cache' : ' · fresh'); },
+      hint:     'GPT-4o-mini (OpenAI) reads all responses and formulates strengths, areas for improvement and concrete suggestions for Series II. Cached for 24 hours.',
+      loading:  'AI is generating the analysis… this takes about 8 seconds.',
+      meta:     function (n, dt, cached, provider) { return 'Based on ' + n + ' responses · generated ' + dt + (cached ? ' · from cache' : ' · fresh') + (provider ? ' · ' + provider : ''); },
       summary:  'Summary',
       strong:   'Strengths',
       improve:  'Areas for improvement',
@@ -376,7 +376,7 @@
     }
 
     aiContent.innerHTML = html || '<p>—</p>';
-    aiMeta.textContent = aiT().meta(payload.response_count || 0, fmtDate(payload.generated_at), !!fromCache);
+    aiMeta.textContent = aiT().meta(payload.response_count || 0, fmtDate(payload.generated_at), !!fromCache, payload.provider || '');
   }
 
   function generate(force) {

@@ -7,7 +7,7 @@ const SESSION_DURATION = 60 * 60 * 8 // 8h
 
 export type Bindings = {
   DB: D1Database
-  AI: any // Cloudflare Workers AI binding (Ai type)
+  AI: any // Cloudflare Workers AI binding (Ai type) — fallback provider
   ADMIN_EMAIL: string
   ADMIN_PASSWORD: string
   SESSION_SECRET: string
@@ -16,6 +16,8 @@ export type Bindings = {
   RESEND_API_KEY?: string
   NOTIFY_FROM?: string
   NOTIFY_TO?: string
+  OPENAI_API_KEY?: string // Primary AI provider (gpt-4o-mini)
+  OPENAI_MODEL?: string   // Optional override (default: gpt-4o-mini)
 }
 
 // Session payload: base64(json) + "." + hmac(secret, base64(json))
