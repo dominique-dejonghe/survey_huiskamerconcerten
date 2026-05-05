@@ -591,4 +591,32 @@
   }
 
   if (pdfBtn) pdfBtn.addEventListener('click', generatePdf);
+
+  // ====== Word (.docx) report download ======
+  // Server-rendered Word document. Uses the currently cached AI analysis for
+  // the active language (aiState.lang). If none exists yet, the document is
+  // generated without the AI section — user can then run the analysis and
+  // download again to include it.
+  var docxBtn = document.getElementById('docxBtn');
+  if (docxBtn) {
+    docxBtn.addEventListener('click', function () {
+      var lang = (aiState && aiState.lang) || 'nl';
+      var url = '/api/admin/export?format=docx&lang=' + encodeURIComponent(lang);
+
+      // Visual feedback: temporarily disable the button so the user knows the
+      // server is working (docx build can take 1-3 seconds for large datasets).
+      var original = docxBtn.textContent;
+      docxBtn.disabled = true;
+      docxBtn.textContent = lang === 'en' ? '⏳ Building Word…' : '⏳ Word wordt gemaakt…';
+
+      // Triggering the download via window.location keeps the existing admin
+      // session cookie (no fetch+blob plumbing needed). Restore the button
+      // shortly after — the browser handles the rest.
+      try { window.location.href = url; } catch (e) { /* ignore */ }
+      setTimeout(function () {
+        docxBtn.disabled = false;
+        docxBtn.textContent = original;
+      }, 4000);
+    });
+  }
 })();

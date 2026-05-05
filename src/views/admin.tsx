@@ -56,7 +56,8 @@ export const DashboardPage: FC = () => (
         <span class="label">Export &amp; beheer:</span>
         <a href="/api/admin/export?format=csv" class="btn">⬇ Export CSV</a>
         <a href="/api/admin/export?format=json" class="btn btn-orange">⬇ Export JSON</a>
-        <button type="button" id="pdfBtn" class="btn btn-teal">📄 PDF rapport</button>
+        <button type="button" id="docxBtn" class="btn btn-teal" title="Volledig rapport als Word-document (.docx) — bevat KPI's, AI-analyse en ruwe data">📝 Word-rapport</button>
+        <button type="button" id="pdfBtn" class="btn btn-teal" title="Visuele snapshot van het dashboard als PDF">📄 PDF rapport</button>
         <button type="button" id="deleteAllBtn" class="btn btn-red">🗑 Wis alle data</button>
       </div>
 

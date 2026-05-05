@@ -12,6 +12,7 @@ import {
 } from './lib/db'
 import { computeStats } from './lib/stats'
 import { rowsToCsv, rowsToJson } from './lib/csv'
+import { buildSurveyDocx } from './lib/docx-report'
 import {
   type Bindings,
   createAdminSession, clearAdminSession, getAdminSession,
@@ -182,7 +183,9 @@ app.get('/api/admin/responses', async (c) => {
 app.get('/api/admin/export', async (c) => {
   const guard = await requireAdmin(c)
   if (guard) return guard
-  const format = c.req.query('format') === 'json' ? 'json' : 'csv'
+  const fmtRaw = c.req.query('format')
+  const format: 'csv' | 'json' | 'docx' =
+    fmtRaw === 'json' ? 'json' : fmtRaw === 'docx' ? 'docx' : 'csv'
   const rows = await listResponses(c.env.DB)
 
   const ip = getClientIp(c)
@@ -190,6 +193,7 @@ app.get('/api/admin/export', async (c) => {
   await logAudit(c.env.DB, `export_${format}`, ipHash, { count: rows.length })
 
   const today = new Date().toISOString().slice(0, 10)
+
   if (format === 'csv') {
     const csv = rowsToCsv(rows)
     return new Response(csv, {
@@ -198,7 +202,9 @@ app.get('/api/admin/export', async (c) => {
         'Content-Disposition': `attachment; filename="huiskamerconcerten-survey-${today}.csv"`,
       },
     })
-  } else {
+  }
+
+  if (format === 'json') {
     const json = rowsToJson(rows)
     return new Response(json, {
       headers: {
@@ -207,6 +213,22 @@ app.get('/api/admin/export', async (c) => {
       },
     })
   }
+
+  // ===== DOCX report (Word document with KPIs, charts, AI analysis) =====
+  const lang: Lang = c.req.query('lang') === 'en' ? 'en' : 'nl'
+  const analysis = await getCachedAnalysis(c.env.DB, lang)
+  const buffer = await buildSurveyDocx(rows, analysis, lang)
+  const nameBase = lang === 'en'
+    ? `house-concerts-report-${today}`
+    : `huiskamerconcerten-rapport-${today}`
+  return new Response(buffer, {
+    headers: {
+      'Content-Type': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      'Content-Disposition': `attachment; filename="${nameBase}.docx"`,
+      'Content-Length': String(buffer.byteLength),
+      'Cache-Control': 'no-store',
+    },
+  })
 })
 
 app.delete('/api/admin/responses/:id', async (c) => {
