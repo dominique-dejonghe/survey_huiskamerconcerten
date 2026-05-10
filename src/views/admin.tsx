@@ -2,6 +2,7 @@ import type { FC } from 'hono/jsx'
 import { Layout } from './layout'
 import type { Brand, Survey, LibraryQuestion } from '../lib/surveys'
 import type { ListSurveysWithStatsRow } from '../lib/surveys'
+import { v } from '../lib/version'
 
 export const LoginPage: FC<{ error?: string }> = ({ error }) => (
   <Layout title="Admin login — Pensato.org" admin>
@@ -274,7 +275,7 @@ export const DashboardPage: FC<{ survey: Survey }> = ({ survey }) => {
         </div>
       </div>
 
-      <script src="/static/admin.js" defer></script>
+      <script src={v('/static/admin.js')} defer></script>
     </Layout>
   )
 }
@@ -491,7 +492,7 @@ export const NewSurveyPage: FC<{
         </form>
       </main>
 
-      <script src="/static/admin-new-survey.js" defer></script>
+      <script src={v('/static/admin-new-survey.js')} defer></script>
     </Layout>
   )
 }

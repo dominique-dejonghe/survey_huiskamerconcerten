@@ -3,6 +3,7 @@ import { Layout } from './layout'
 import { QUESTIONS, type Question } from '../lib/questions'
 import { UI, SECTIONS_I18N, QUESTIONS_I18N, type Lang } from '../lib/i18n'
 import type { Brand, Survey } from '../lib/surveys'
+import { v } from '../lib/version'
 
 const SiteHeader: FC<{ lang: Lang; brand?: Brand | null; survey?: Survey | null }> = ({ lang, brand, survey }) => {
   const t = UI[lang]
@@ -278,7 +279,7 @@ export const SurveyPage: FC<{ lang?: Lang; brand?: Brand | null; survey?: Survey
       <script
         dangerouslySetInnerHTML={{ __html: `window.SURVEY_I18N=${JSON.stringify(clientI18n)};` }}
       />
-      <script src="/static/survey.js" defer></script>
+      <script src={v('/static/survey.js')} defer></script>
     </Layout>
   )
 }

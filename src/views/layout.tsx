@@ -1,6 +1,7 @@
 import type { FC } from 'hono/jsx'
 import { UI, type Lang } from '../lib/i18n'
 import type { Brand } from '../lib/surveys'
+import { v } from '../lib/version'
 
 export const Layout: FC<{
   title: string
@@ -33,7 +34,7 @@ export const Layout: FC<{
           href="https://fonts.googleapis.com/css2?family=Lato:wght@300;400;700&family=Playfair+Display:ital,wght@0,500;0,600;0,700;1,400;1,600&display=swap"
           rel="stylesheet"
         />
-        <link rel="stylesheet" href="/static/styles.css" />
+        <link rel="stylesheet" href={v('/static/styles.css')} />
         <link rel="icon" type="image/svg+xml" href="/static/favicon.svg" />
       </head>
       <body class={bodyClass} style={brandStyle || undefined}>
