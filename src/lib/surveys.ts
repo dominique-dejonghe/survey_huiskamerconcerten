@@ -224,3 +224,97 @@ export async function getQuestionsForSurvey(db: D1Database, survey: Survey): Pro
   }
   return survey.question_codes.map(c => byCode.get(c)).filter((q): q is LibraryQuestion => Boolean(q))
 }
+
+// ============================================================
+// CREATE SURVEY — used by /admin/surveys/new
+// ============================================================
+
+/** URL-friendly slug: lowercase, ASCII, hyphens. */
+export function slugify(input: string): string {
+  return (input || '')
+    .toLowerCase()
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')      // strip diacritics (é → e)
+    .replace(/['"`]/g, '')                 // drop quotes
+    .replace(/[^a-z0-9]+/g, '-')           // non-alphanum → hyphen
+    .replace(/^-+|-+$/g, '')               // trim hyphens
+    .replace(/-{2,}/g, '-')                // collapse runs
+    .slice(0, 80)
+}
+
+/** Returns slug if free, otherwise slug-2, slug-3, … (within the brand). */
+export async function generateUniqueSlug(
+  db: D1Database, brandId: string, base: string,
+): Promise<string> {
+  const seed = slugify(base) || 'enquete'
+  let candidate = seed
+  let n = 1
+  // hard cap at 50 attempts to avoid runaway loops
+  while (n < 50) {
+    const exists = await db.prepare(
+      'SELECT 1 FROM surveys WHERE brand_id = ? AND slug = ? LIMIT 1',
+    ).bind(brandId, candidate).first<{ '1': number }>()
+    if (!exists) return candidate
+    n += 1
+    candidate = `${seed}-${n}`
+  }
+  // fallback: timestamp suffix
+  return `${seed}-${Date.now()}`
+}
+
+export type CreateSurveyInput = {
+  brandId: string
+  slug: string
+  seriesName?: string | null
+  artist?: string | null
+  concertDate?: string | null   // ISO date "YYYY-MM-DD"
+  location?: string | null
+  titleNl: string
+  titleEn?: string | null       // falls back to titleNl
+  subtitleNl?: string | null
+  subtitleEn?: string | null
+  questionCodes: string[]
+  status?: SurveyStatus         // defaults to 'open'
+  langDefault?: 'nl' | 'en'     // defaults to 'nl'
+  introNl?: string | null
+  introEn?: string | null
+  thanksNl?: string | null
+  thanksEn?: string | null
+}
+
+/** Insert a survey. Returns the new id. Caller must validate inputs first. */
+export async function createSurvey(
+  db: D1Database, input: CreateSurveyInput,
+): Promise<{ id: number; slug: string }> {
+  const codesJson = JSON.stringify(input.questionCodes ?? [])
+  const r = await db.prepare(`
+    INSERT INTO surveys (
+      brand_id, slug, series_name, artist, concert_date, location,
+      title_nl, title_en, subtitle_nl, subtitle_en,
+      status, lang_default, question_codes,
+      intro_nl, intro_en, thanks_nl, thanks_en
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).bind(
+    input.brandId,
+    input.slug,
+    input.seriesName ?? null,
+    input.artist ?? null,
+    input.concertDate ?? null,
+    input.location ?? null,
+    input.titleNl,
+    input.titleEn ?? input.titleNl,
+    input.subtitleNl ?? null,
+    input.subtitleEn ?? null,
+    input.status ?? 'open',
+    input.langDefault ?? 'nl',
+    codesJson,
+    input.introNl ?? null,
+    input.introEn ?? null,
+    input.thanksNl ?? null,
+    input.thanksEn ?? null,
+  ).run()
+
+  // D1's meta.last_row_id is the new id
+  const id = Number((r as any).meta?.last_row_id ?? 0)
+  return { id, slug: input.slug }
+}

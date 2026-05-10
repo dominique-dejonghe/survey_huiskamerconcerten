@@ -4,7 +4,7 @@ import { logger } from 'hono/logger'
 
 import { SurveyPage, ThanksPage, PrivacyPage } from './views/survey'
 import { LandingPage } from './views/landing'
-import { LoginPage, DashboardPage, AdminOverviewPage } from './views/admin'
+import { LoginPage, DashboardPage, AdminOverviewPage, NewSurveyPage } from './views/admin'
 import { responseSchema } from './lib/validation'
 import { hashIp } from './lib/crypto'
 import {
@@ -26,6 +26,7 @@ import {
 import {
   listBrands, listSurveys, listSurveysWithStats,
   getBrandByPrefix, getSurveyBySlug, getSurveyById,
+  listLibraryQuestions, createSurvey, slugify, generateUniqueSlug,
 } from './lib/surveys'
 import type { Lang } from './lib/i18n'
 
@@ -245,10 +246,125 @@ app.get('/admin', async (c) => {
   return c.html(<AdminOverviewPage surveys={surveys} brands={brands} />)
 })
 
+// New-survey form (must come BEFORE /:id to avoid 'new' being parsed as id)
+app.get('/admin/surveys/new', async (c) => {
+  const guard = await requireAdmin(c)
+  if (guard) return guard
+  const brands = await listBrands(c.env.DB)
+  const questions = await listLibraryQuestions(c.env.DB)
+  const surveys = await listSurveys(c.env.DB, {})
+  const error = c.req.query('error') || ''
+  return c.html(<NewSurveyPage brands={brands} questions={questions} surveys={surveys} error={error} />)
+})
+
+// JSON: check whether a slug is free for a given brand (live form validation)
+app.get('/api/admin/check-slug', async (c) => {
+  const guard = await requireAdmin(c)
+  if (guard) return guard
+  const brandId = c.req.query('brand') || ''
+  const raw = c.req.query('slug') || ''
+  const slug = slugify(raw)
+  if (!brandId || !slug) return c.json({ ok: false, free: false, slug, reason: 'missing' })
+  const exists = await c.env.DB.prepare(
+    'SELECT 1 FROM surveys WHERE brand_id = ? AND slug = ? LIMIT 1',
+  ).bind(brandId, slug).first()
+  return c.json({ ok: true, free: !exists, slug })
+})
+
+// Submit: create survey + redirect to its dashboard
+app.post('/admin/surveys', async (c) => {
+  const guard = await requireAdmin(c)
+  if (guard) return guard
+
+  const form = await c.req.formData()
+  const get = (k: string) => {
+    const v = form.get(k)
+    return typeof v === 'string' ? v.trim() : ''
+  }
+  const getAll = (k: string) => form.getAll(k).filter((v): v is string => typeof v === 'string')
+
+  const brandId = get('brand_id')
+  const titleNl = get('title_nl')
+  const titleEn = get('title_en')
+  const slugRaw = get('slug')
+  const seriesName = get('series_name')
+  const artist = get('artist')
+  const concertDate = get('concert_date')
+  const location = get('location')
+  const subtitleNl = get('subtitle_nl')
+  const subtitleEn = get('subtitle_en')
+  const status = (get('status') || 'open') as 'open' | 'closed' | 'archived'
+  const langDefault = (get('lang_default') || 'nl') as 'nl' | 'en'
+  const codes = getAll('question_codes')
+
+  // ----- Validation -----
+  const errs: string[] = []
+  if (!brandId) errs.push('Kies een merk.')
+  if (!titleNl) errs.push('Titel (NL) is verplicht.')
+  if (codes.length === 0) errs.push('Selecteer minstens één vraag.')
+  if (status !== 'open' && status !== 'closed' && status !== 'archived') errs.push('Ongeldige status.')
+  // verify brand exists
+  const brand = brandId
+    ? await c.env.DB.prepare('SELECT id FROM brands WHERE id = ?').bind(brandId).first()
+    : null
+  if (brandId && !brand) errs.push('Onbekend merk.')
+  // verify question codes exist
+  if (codes.length > 0) {
+    const placeholders = codes.map(() => '?').join(',')
+    const found = await c.env.DB
+      .prepare(`SELECT code FROM questions WHERE code IN (${placeholders})`)
+      .bind(...codes).all<{ code: string }>()
+    const foundSet = new Set((found.results ?? []).map(r => r.code))
+    const missing = codes.filter(c => !foundSet.has(c))
+    if (missing.length > 0) errs.push(`Onbekende vragen: ${missing.join(', ')}`)
+  }
+
+  if (errs.length > 0) {
+    return c.redirect('/admin/surveys/new?error=' + encodeURIComponent(errs.join(' · ')))
+  }
+
+  // Slug: use what user typed (slugified), or auto-generate from title
+  const seedSlug = slugRaw || titleNl
+  let finalSlug = slugify(seedSlug) || 'enquete'
+  // If duplicate, fall back to unique slug (server safety net)
+  const dupe = await c.env.DB
+    .prepare('SELECT 1 FROM surveys WHERE brand_id = ? AND slug = ? LIMIT 1')
+    .bind(brandId, finalSlug).first()
+  if (dupe) {
+    finalSlug = await generateUniqueSlug(c.env.DB, brandId, seedSlug)
+  }
+
+  const created = await createSurvey(c.env.DB, {
+    brandId,
+    slug: finalSlug,
+    seriesName: seriesName || null,
+    artist: artist || null,
+    concertDate: concertDate || null,
+    location: location || null,
+    titleNl,
+    titleEn: titleEn || titleNl,
+    subtitleNl: subtitleNl || null,
+    subtitleEn: subtitleEn || null,
+    questionCodes: codes,
+    status,
+    langDefault,
+  })
+
+  // Audit log
+  const ip = getClientIp(c)
+  const ipHash = await hashIp(ip, c.env.IP_HASH_SALT || 'dev')
+  await logAudit(c.env.DB, 'survey_create', ipHash, {
+    surveyId: created.id, brandId, slug: created.slug, questionCount: codes.length,
+  })
+
+  return c.redirect(`/admin/surveys/${created.id}?created=1`)
+})
+
 app.get('/admin/surveys/:id', async (c) => {
   const guard = await requireAdmin(c)
   if (guard) return guard
   const id = parseInt(c.req.param('id'), 10)
+  if (!Number.isFinite(id) || id <= 0) return c.notFound()
   const survey = await getSurveyById(c.env.DB, id)
   if (!survey) return c.notFound()
   return c.html(<DashboardPage survey={survey} />)

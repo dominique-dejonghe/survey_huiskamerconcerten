@@ -1,6 +1,6 @@
 import type { FC } from 'hono/jsx'
 import { Layout } from './layout'
-import type { Brand, Survey } from '../lib/surveys'
+import type { Brand, Survey, LibraryQuestion } from '../lib/surveys'
 import type { ListSurveysWithStatsRow } from '../lib/surveys'
 
 export const LoginPage: FC<{ error?: string }> = ({ error }) => (
@@ -86,9 +86,10 @@ export const AdminOverviewPage: FC<{
         <section class="admin-section">
           <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;">
             <h2 style="margin:0;">Open enquêtes ({open.length})</h2>
+            <a href="/admin/surveys/new" class="btn btn-teal">+ Nieuwe enquête</a>
           </div>
           {open.length === 0
-            ? <p style="color:#777;font-style:italic;">Geen open enquêtes.</p>
+            ? <p style="color:#777;font-style:italic;">Nog geen open enquêtes. Klik op <strong>+ Nieuwe enquête</strong> om er één aan te maken.</p>
             : (
               <div class="survey-grid">
                 {open.map(s => <SurveyCard s={s} />)}
@@ -117,10 +118,6 @@ export const AdminOverviewPage: FC<{
               </span>
             ))}
           </div>
-          <p style="color:#777;font-size:13px;margin-top:12px;">
-            Een nieuwe enquête aanmaken? Dit gebeurt momenteel via de SQL-console (zie README).
-            Een interactief formulier komt in de volgende iteratie.
-          </p>
         </section>
       </main>
     </Layout>
@@ -278,6 +275,223 @@ export const DashboardPage: FC<{ survey: Survey }> = ({ survey }) => {
       </div>
 
       <script src="/static/admin.js" defer></script>
+    </Layout>
+  )
+}
+
+// ============================================================
+// New survey form
+// ============================================================
+
+// Group questions by category for nicer UX
+function groupQuestions(qs: LibraryQuestion[]): Array<{ category: string; items: LibraryQuestion[] }> {
+  const map = new Map<string, LibraryQuestion[]>()
+  for (const q of qs) {
+    const cat = q.category || 'overig'
+    if (!map.has(cat)) map.set(cat, [])
+    map.get(cat)!.push(q)
+  }
+  // sensible order: known sections first
+  const order = ['algemeen', 'locatie', 'muzikaal', 'jos', 'organisatie', 'reeks2', 'totslot']
+  const sorted = Array.from(map.entries()).sort((a, b) => {
+    const ai = order.indexOf(a[0]); const bi = order.indexOf(b[0])
+    if (ai === -1 && bi === -1) return a[0].localeCompare(b[0])
+    if (ai === -1) return 1
+    if (bi === -1) return -1
+    return ai - bi
+  })
+  return sorted.map(([category, items]) => ({ category, items }))
+}
+
+const CATEGORY_LABELS: Record<string, string> = {
+  algemeen: 'Algemene beleving',
+  locatie: 'Locatie & sfeer',
+  muzikaal: 'Muzikaal & instrument',
+  jos: 'Gastheer / artiest',
+  organisatie: 'Praktische organisatie',
+  reeks2: 'Volgende reeks',
+  totslot: 'Tot slot (contact)',
+  overig: 'Overig',
+}
+
+export const NewSurveyPage: FC<{
+  brands: Brand[]
+  questions: LibraryQuestion[]
+  surveys: Survey[]
+  error?: string
+}> = ({ brands, questions, surveys, error }) => {
+  const groups = groupQuestions(questions)
+  const defaultBrand = brands[0]?.id || 'huiskamer'
+
+  return (
+    <Layout title="Nieuwe enquête — admin" admin>
+      <header class="admin-header">
+        <a href="/admin" class="btn btn-ghost" style="margin-right:auto;">← Alle enquêtes</a>
+        <h1 style="margin:0 0 0 16px;">+ Nieuwe enquête</h1>
+        <div class="spacer"></div>
+        <a href="/admin/logout" class="btn btn-ghost">Uitloggen</a>
+      </header>
+
+      <main class="admin-main new-survey-form">
+        {error ? (
+          <div class="form-error" role="alert">
+            <strong>Niet opgeslagen:</strong> {error}
+          </div>
+        ) : null}
+
+        <form method="POST" action="/admin/surveys" id="newSurveyForm" autocomplete="off">
+          {/* ───────── Brand ───────── */}
+          <section class="admin-section">
+            <h2>1. Voor welk merk?</h2>
+            <p class="form-hint">Kies onder welk merk deze enquête komt. Dit bepaalt de URL, kleuren en het logo.</p>
+            <div class="brand-radio-row">
+              {brands.map((b, i) => (
+                <label class="brand-radio" style={`--brand-primary:${b.primary_color};--brand-accent:${b.accent_color};`}>
+                  <input
+                    type="radio"
+                    name="brand_id"
+                    value={b.id}
+                    required
+                    {...(b.id === defaultBrand ? { checked: true } : {})}
+                  />
+                  {b.logo_url ? <img src={b.logo_url} alt={b.name_nl} class="brand-radio-logo" /> : null}
+                  <div class="brand-radio-text">
+                    <strong>{b.name_nl}</strong>
+                    <span class="brand-radio-prefix">/{b.url_prefix}/&lt;slug&gt;</span>
+                  </div>
+                </label>
+              ))}
+            </div>
+          </section>
+
+          {/* ───────── Titles & metadata ───────── */}
+          <section class="admin-section">
+            <h2>2. Titel &amp; details</h2>
+            <div class="form-grid">
+              <div class="form-field">
+                <label for="title_nl">Titel (NL) <span class="req">*</span></label>
+                <input type="text" id="title_nl" name="title_nl" required
+                  placeholder="bv. Reeks II — Bach in de Huiskamer" maxLength={150} />
+                <span class="form-helper">Verschijnt bovenaan de enquête en in het admin-overzicht.</span>
+              </div>
+              <div class="form-field">
+                <label for="title_en">Titel (EN)</label>
+                <input type="text" id="title_en" name="title_en"
+                  placeholder="Series II — Bach in the Living Room" maxLength={150} />
+                <span class="form-helper">Optioneel. Leeg laten = NL-versie wordt gebruikt.</span>
+              </div>
+
+              <div class="form-field full">
+                <label for="subtitle_nl">Ondertitel (NL)</label>
+                <input type="text" id="subtitle_nl" name="subtitle_nl"
+                  placeholder="Jouw mening helpt ons Reeks III te verbeteren." maxLength={200} />
+              </div>
+              <div class="form-field full">
+                <label for="subtitle_en">Ondertitel (EN)</label>
+                <input type="text" id="subtitle_en" name="subtitle_en"
+                  placeholder="Your opinion helps us improve Series III." maxLength={200} />
+              </div>
+
+              <div class="form-field">
+                <label for="series_name">Reeks / serie</label>
+                <input type="text" id="series_name" name="series_name"
+                  placeholder="bv. Reeks II 2026" maxLength={80} />
+              </div>
+              <div class="form-field">
+                <label for="artist">Artiest(en)</label>
+                <input type="text" id="artist" name="artist"
+                  placeholder="bv. Jos van Immerseel" maxLength={120} />
+              </div>
+
+              <div class="form-field">
+                <label for="concert_date">Datum concert</label>
+                <input type="date" id="concert_date" name="concert_date" />
+                <span class="form-helper">Optioneel. Datum waarop het concert plaatsvond.</span>
+              </div>
+              <div class="form-field">
+                <label for="location">Locatie</label>
+                <input type="text" id="location" name="location"
+                  placeholder="bv. Brugge" maxLength={120} />
+              </div>
+
+              <div class="form-field">
+                <label for="status">Status</label>
+                <select id="status" name="status">
+                  <option value="open" selected>Open (zichtbaar op landing)</option>
+                  <option value="closed">Gesloten</option>
+                  <option value="archived">Gearchiveerd</option>
+                </select>
+              </div>
+              <div class="form-field">
+                <label for="lang_default">Standaardtaal</label>
+                <select id="lang_default" name="lang_default">
+                  <option value="nl" selected>Nederlands</option>
+                  <option value="en">Engels</option>
+                </select>
+              </div>
+            </div>
+          </section>
+
+          {/* ───────── Slug / URL ───────── */}
+          <section class="admin-section">
+            <h2>3. URL</h2>
+            <p class="form-hint">Wordt automatisch uit de titel gegenereerd, maar je kan hem aanpassen.</p>
+            <div class="slug-row">
+              <span class="slug-prefix" id="slugPrefix">/h/</span>
+              <input type="text" id="slug" name="slug" maxLength={80}
+                placeholder="auto uit titel" pattern="[a-z0-9\-]+" autocapitalize="off" autocorrect="off" spellcheck={false} />
+              <span class="slug-status" id="slugStatus"></span>
+            </div>
+            <p class="form-helper">
+              Alleen kleine letters, cijfers en koppelteken (-). Voorbeeld: <code>reeks-2-bach</code>
+            </p>
+          </section>
+
+          {/* ───────── Question picker ───────── */}
+          <section class="admin-section">
+            <h2>4. Welke vragen?</h2>
+            <div class="form-actions-inline">
+              <span class="form-hint">Selecteer minstens één vraag uit de bibliotheek (geselecteerde: <strong id="qCount">0</strong>).</span>
+              <span class="spacer"></span>
+              <button type="button" class="btn btn-ghost btn-small" id="qSelectAll">Alles aan</button>
+              <button type="button" class="btn btn-ghost btn-small" id="qSelectNone">Alles uit</button>
+              {surveys.length > 0 ? (
+                <select id="qCopyFrom" class="form-inline-select" title="Kopieer vragenset van bestaande enquête">
+                  <option value="">— kopieer van bestaande enquête —</option>
+                  {surveys.map(s => (
+                    <option value={s.question_codes.join(',')}>{s.title_nl}</option>
+                  ))}
+                </select>
+              ) : null}
+            </div>
+
+            {groups.map(({ category, items }) => (
+              <div class="question-group">
+                <h3 class="question-group-title">{CATEGORY_LABELS[category] ?? category}</h3>
+                <div class="question-list">
+                  {items.map(q => (
+                    <label class="question-item">
+                      <input type="checkbox" name="question_codes" value={q.code} class="q-check" />
+                      <span class="q-code">{q.code}</span>
+                      <span class="q-text">{q.label_nl}</span>
+                      <span class="q-type">{q.type}{q.required ? ' · verplicht' : ''}</span>
+                    </label>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </section>
+
+          {/* ───────── Submit ───────── */}
+          <section class="admin-section form-submit-row">
+            <a href="/admin" class="btn btn-ghost">Annuleren</a>
+            <span class="spacer"></span>
+            <button type="submit" class="btn btn-teal" id="submitBtn">Enquête aanmaken</button>
+          </section>
+        </form>
+      </main>
+
+      <script src="/static/admin-new-survey.js" defer></script>
     </Layout>
   )
 }

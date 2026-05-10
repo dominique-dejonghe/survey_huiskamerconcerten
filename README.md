@@ -30,6 +30,7 @@ Brand kleuren worden via CSS custom properties (`--brand-primary`, `--brand-acce
 | **Reeks 1 — Immerseel & Ito** (NL) | https://huiskamerconcerten-survey.pages.dev/h/reeks-1-immerseel-ito |
 | **Reeks 1 — Immerseel & Ito** (EN) | https://huiskamerconcerten-survey.pages.dev/h/reeks-1-immerseel-ito/en |
 | **Admin overzicht** | https://huiskamerconcerten-survey.pages.dev/admin |
+| **Nieuwe enquête aanmaken** | https://huiskamerconcerten-survey.pages.dev/admin/surveys/new |
 | **Per-survey dashboard** | https://huiskamerconcerten-survey.pages.dev/admin/surveys/1 |
 | **Bedankpagina (NL)** | https://huiskamerconcerten-survey.pages.dev/h/<slug>/dank-je |
 | **Privacy (NL)** | https://huiskamerconcerten-survey.pages.dev/privacy |
@@ -100,45 +101,42 @@ ip_hash, user_agent, created_at
 
 20 vragen (`q1_nps`, `q2_immerseel_perf`, …, `q20_contact`) zitten in de `questions` tabel. Een survey kiest welke vragen bij hem horen via een **JSON array van question codes** in `surveys.question_codes`. Antwoorden worden voorlopig nog in de oude vaste kolommen (`q1_nps` … `q20_email`) opgeslagen voor backwards compatibility, met `answers_json` als toekomstige flexibele opslag voor surveys met andere vragen.
 
-### Hoe een nieuwe survey toevoegen (SQL recipe)
+### Hoe een nieuwe survey toevoegen
+
+**Vanuit admin (aanbevolen):**
+
+1. Log in op `/admin`
+2. Klik op **+ Nieuwe enquête** rechtsboven in het overzicht
+3. Vul het formulier in:
+   - **Merk** kiezen (Huiskamerconcerten of Ebdiepconcerten)
+   - **Titel NL** (verplicht), Titel EN (optioneel — leeg = NL gebruiken)
+   - Ondertitel, reeks, artiest, datum, locatie (allemaal optioneel)
+   - **URL slug** wordt auto-gegenereerd uit de titel maar je kan hem aanpassen; live availability-check
+   - **Status**: open / closed / archived
+   - **Vragen kiezen** uit de bibliotheek, of via "kopieer van bestaande enquête"
+4. Klik **Enquête aanmaken** → je komt direct in het dashboard van de nieuwe enquête
+
+**Via SQL (fallback voor bulk-import):**
 
 ```sql
--- 1. Voor een Huiskamerconcerten survey (brand_id=1):
 INSERT INTO surveys (
   brand_id, slug, series_name, artist, concert_date, location,
   title_nl, title_en, subtitle_nl, subtitle_en,
   question_codes, status
 ) VALUES (
-  1,
-  'reeks-2-bach',                 -- URL slug → /h/reeks-2-bach
-  'Reeks II',
-  'Naam van de musicus',
-  '2026-09-15',
-  'Brugge',
-  'Reeks II — Bach in de Huiskamer',
-  'Series II — Bach in the Living Room',
-  'Jouw mening helpt ons Reeks III te verbeteren.',
-  'Your opinion helps us improve Series III.',
-  -- Selecteer welke vragen uit de bibliotheek je gebruikt:
-  '["q1_nps","q2_immerseel_perf","q3_ito_perf","q5_acoustics","q19_open","q20_contact"]',
+  'ebdiep',                       -- brand_id is een string: 'huiskamer' of 'ebdiep'
+  'concert-2026-09-mariekerke',   -- URL slug → /e/concert-2026-09-mariekerke
+  'Najaar 2026', '...', '2026-09-15', 'Mariekerke',
+  '...', '...', '...', '...',
+  '["q1_nps","q4_sfeer","q19_naam","q20_contact"]',
   'open'
 );
-
--- 2. Voor een Ebdiepconcerten survey (brand_id=2):
-INSERT INTO surveys (brand_id, slug, …) VALUES (2, 'concert-2026-mariekerke', …);
 ```
 
-Toepassen lokaal:
+Toepassen op productie:
 ```bash
-npx wrangler d1 execute huiskamerconcerten-prod --local --command="INSERT INTO surveys ..."
+npx wrangler d1 execute huiskamerconcerten-prod --remote --command="INSERT INTO surveys ..."
 ```
-
-Toepassen productie:
-```bash
-npx wrangler d1 execute huiskamerconcerten-prod --command="INSERT INTO surveys ..."
-```
-
-> **Phase 2 (toekomst)**: een interactief admin-formulier om dit zonder SQL te doen.
 
 ---
 
@@ -158,12 +156,13 @@ npx wrangler d1 execute huiskamerconcerten-prod --command="INSERT INTO surveys .
 ✅ **Authenticatie** — HMAC-signed session cookie, e-mail+wachtwoord
 ✅ **Rate limiting** — 5 submits/IP/uur via SHA-256 hash
 ✅ **Audit log** — alle admin acties (login, delete, export, AI generate)
-✅ **Migration toegepast lokaal** — 5 migrations, brands, surveys, questions tabellen
+✅ **Migration toegepast lokaal + productie** — 5 migrations, brands, surveys, questions tabellen
+✅ **Admin form: nieuwe enquête aanmaken** — `/admin/surveys/new` met brand-keuze, auto-slug, live availability-check, question picker met "kopieer van bestaande"
 
 ## Features Not Yet Implemented
 
-⏳ **Interactief admin-formulier** voor surveys creëren (nu SQL-only)
-⏳ **Question editor in admin** — vragen toevoegen/wijzigen via UI
+⏳ **Question editor in admin** — vragen toevoegen/wijzigen via UI (nu enkel via migration)
+⏳ **Edit/clone bestaande survey** — momenteel kan een survey enkel aangemaakt worden, niet gewijzigd
 ⏳ **Survey duplicate** — kopieer een survey als basis voor een nieuwe
 ⏳ **Bulk e-mail uitnodigingen** vanuit admin
 ⏳ **Per-survey Resend-template** voor confirmation/notification mails
@@ -173,11 +172,10 @@ npx wrangler d1 execute huiskamerconcerten-prod --command="INSERT INTO surveys .
 
 ## Recommended Next Steps
 
-1. **Apply migrations productie** + verifieer 9 bestaande responses gelinkt aan `survey_id=1`
-2. **Deploy naar Cloudflare Pages** + visuele controle van landing/admin/Ebdiep paginas
-3. **Maak eerste echte Ebdiepconcerten survey** via SQL recipe hierboven
-4. **Phase 2** — bouw admin-formulier voor survey-creatie (geen SQL meer nodig)
-5. **Phase 3** — Ebdiep-specifieke hero/header design
+1. **Maak eerste echte Ebdiepconcerten survey** via `/admin/surveys/new` (geen SQL meer nodig!)
+2. **Edit-functionaliteit** — wijzigen van bestaande surveys (titel, status, vragen)
+3. **Question library editor** — vragen toevoegen/wijzigen vanuit admin
+4. **Ebdiep-specifieke hero/header design** beyond just kleurwissel
 
 ---
 
