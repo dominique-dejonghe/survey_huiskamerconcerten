@@ -318,3 +318,93 @@ export async function createSurvey(
   const id = Number((r as any).meta?.last_row_id ?? 0)
   return { id, slug: input.slug }
 }
+
+// ============================================================
+// UPDATE SURVEY — used by /admin/surveys/:id/edit
+// ============================================================
+
+export type UpdateSurveyInput = {
+  // brand_id is intentionally NOT updatable: changing it would orphan responses
+  // and break public URLs. If the user really needs to move a survey to another
+  // brand, do it via the database console.
+  slug: string
+  seriesName?: string | null
+  artist?: string | null
+  concertDate?: string | null
+  location?: string | null
+  titleNl: string
+  titleEn?: string | null
+  subtitleNl?: string | null
+  subtitleEn?: string | null
+  questionCodes: string[]
+  status?: SurveyStatus
+  langDefault?: 'nl' | 'en'
+  introNl?: string | null
+  introEn?: string | null
+  thanksNl?: string | null
+  thanksEn?: string | null
+}
+
+/** Returns slug if free OR already belongs to surveyId, otherwise slug-2, slug-3, … */
+export async function generateUniqueSlugForUpdate(
+  db: D1Database, brandId: string, surveyId: number, base: string,
+): Promise<string> {
+  const seed = slugify(base) || 'enquete'
+  let candidate = seed
+  let n = 1
+  while (n < 50) {
+    const exists = await db.prepare(
+      'SELECT id FROM surveys WHERE brand_id = ? AND slug = ? LIMIT 1',
+    ).bind(brandId, candidate).first<{ id: number }>()
+    if (!exists || exists.id === surveyId) return candidate
+    n += 1
+    candidate = `${seed}-${n}`
+  }
+  return `${seed}-${Date.now()}`
+}
+
+/** Update an existing survey. Caller must validate inputs first. */
+export async function updateSurvey(
+  db: D1Database, surveyId: number, input: UpdateSurveyInput,
+): Promise<void> {
+  const codesJson = JSON.stringify(input.questionCodes ?? [])
+  await db.prepare(`
+    UPDATE surveys SET
+      slug = ?,
+      series_name = ?,
+      artist = ?,
+      concert_date = ?,
+      location = ?,
+      title_nl = ?,
+      title_en = ?,
+      subtitle_nl = ?,
+      subtitle_en = ?,
+      status = ?,
+      lang_default = ?,
+      question_codes = ?,
+      intro_nl = ?,
+      intro_en = ?,
+      thanks_nl = ?,
+      thanks_en = ?,
+      updated_at = CURRENT_TIMESTAMP
+    WHERE id = ?
+  `).bind(
+    input.slug,
+    input.seriesName ?? null,
+    input.artist ?? null,
+    input.concertDate ?? null,
+    input.location ?? null,
+    input.titleNl,
+    input.titleEn ?? input.titleNl,
+    input.subtitleNl ?? null,
+    input.subtitleEn ?? null,
+    input.status ?? 'open',
+    input.langDefault ?? 'nl',
+    codesJson,
+    input.introNl ?? null,
+    input.introEn ?? null,
+    input.thanksNl ?? null,
+    input.thanksEn ?? null,
+    surveyId,
+  ).run()
+}

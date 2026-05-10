@@ -4,7 +4,7 @@ import { logger } from 'hono/logger'
 
 import { SurveyPage, ThanksPage, PrivacyPage } from './views/survey'
 import { LandingPage } from './views/landing'
-import { LoginPage, DashboardPage, AdminOverviewPage, NewSurveyPage } from './views/admin'
+import { LoginPage, DashboardPage, AdminOverviewPage, NewSurveyPage, EditSurveyPage } from './views/admin'
 import { responseSchema } from './lib/validation'
 import { hashIp } from './lib/crypto'
 import {
@@ -25,8 +25,9 @@ import {
 } from './lib/ai'
 import {
   listBrands, listSurveys, listSurveysWithStats,
-  getBrandByPrefix, getSurveyBySlug, getSurveyById,
+  getBrandByPrefix, getSurveyBySlug, getSurveyById, getBrand,
   listLibraryQuestions, createSurvey, slugify, generateUniqueSlug,
+  updateSurvey, generateUniqueSlugForUpdate,
 } from './lib/surveys'
 import type { Lang } from './lib/i18n'
 
@@ -44,7 +45,7 @@ app.use('*', async (c, next) => {
         "script-src 'self' 'unsafe-inline' https://cdnjs.cloudflare.com",
         "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
         "font-src 'self' https://fonts.gstatic.com data:",
-        "img-src 'self' data: blob:",
+        "img-src 'self' data: blob: https://api.qrserver.com",
         "connect-src 'self'",
         "frame-ancestors 'none'",
       ].join('; ')
@@ -367,7 +368,106 @@ app.get('/admin/surveys/:id', async (c) => {
   if (!Number.isFinite(id) || id <= 0) return c.notFound()
   const survey = await getSurveyById(c.env.DB, id)
   if (!survey) return c.notFound()
-  return c.html(<DashboardPage survey={survey} />)
+  const brand = await getBrand(c.env.DB, survey.brand_id)
+  return c.html(<DashboardPage survey={survey} brand={brand} />)
+})
+
+// ───── Edit survey: GET form + POST update ─────
+app.get('/admin/surveys/:id/edit', async (c) => {
+  const guard = await requireAdmin(c)
+  if (guard) return guard
+  const id = parseInt(c.req.param('id'), 10)
+  if (!Number.isFinite(id) || id <= 0) return c.notFound()
+  const survey = await getSurveyById(c.env.DB, id)
+  if (!survey) return c.notFound()
+  const brands = await listBrands(c.env.DB)
+  const questions = await listLibraryQuestions(c.env.DB)
+  const error = c.req.query('error') || ''
+  return c.html(
+    <EditSurveyPage survey={survey} brands={brands} questions={questions} error={error} />,
+  )
+})
+
+app.post('/admin/surveys/:id', async (c) => {
+  const guard = await requireAdmin(c)
+  if (guard) return guard
+  const id = parseInt(c.req.param('id'), 10)
+  if (!Number.isFinite(id) || id <= 0) return c.notFound()
+  const existing = await getSurveyById(c.env.DB, id)
+  if (!existing) return c.notFound()
+
+  const form = await c.req.formData()
+  const get = (k: string) => {
+    const v = form.get(k)
+    return typeof v === 'string' ? v.trim() : ''
+  }
+  const getAll = (k: string) =>
+    form.getAll(k).filter((v): v is string => typeof v === 'string')
+
+  const titleNl = get('title_nl')
+  const titleEn = get('title_en')
+  const slugRaw = get('slug')
+  const seriesName = get('series_name')
+  const artist = get('artist')
+  const concertDate = get('concert_date')
+  const location = get('location')
+  const subtitleNl = get('subtitle_nl')
+  const subtitleEn = get('subtitle_en')
+  const status = (get('status') || existing.status) as 'open' | 'closed' | 'archived'
+  const langDefault = (get('lang_default') || existing.lang_default) as 'nl' | 'en'
+  const codes = getAll('question_codes')
+
+  const errs: string[] = []
+  if (!titleNl) errs.push('Titel (NL) is verplicht.')
+  if (codes.length === 0) errs.push('Selecteer minstens één vraag.')
+  if (status !== 'open' && status !== 'closed' && status !== 'archived') {
+    errs.push('Ongeldige status.')
+  }
+  if (codes.length > 0) {
+    const placeholders = codes.map(() => '?').join(',')
+    const found = await c.env.DB
+      .prepare(`SELECT code FROM questions WHERE code IN (${placeholders})`)
+      .bind(...codes).all<{ code: string }>()
+    const foundSet = new Set((found.results ?? []).map(r => r.code))
+    const missing = codes.filter(x => !foundSet.has(x))
+    if (missing.length > 0) errs.push(`Onbekende vragen: ${missing.join(', ')}`)
+  }
+
+  if (errs.length > 0) {
+    return c.redirect(
+      `/admin/surveys/${id}/edit?error=` + encodeURIComponent(errs.join(' · ')),
+    )
+  }
+
+  // Slug: keep existing if user emptied the field, otherwise re-validate uniqueness
+  // within the brand (allowing the survey's own slug to remain unchanged).
+  const seedSlug = slugRaw || existing.slug
+  const finalSlug = await generateUniqueSlugForUpdate(
+    c.env.DB, existing.brand_id, id, seedSlug,
+  )
+
+  await updateSurvey(c.env.DB, id, {
+    slug: finalSlug,
+    seriesName: seriesName || null,
+    artist: artist || null,
+    concertDate: concertDate || null,
+    location: location || null,
+    titleNl,
+    titleEn: titleEn || titleNl,
+    subtitleNl: subtitleNl || null,
+    subtitleEn: subtitleEn || null,
+    questionCodes: codes,
+    status,
+    langDefault,
+  })
+
+  const ip = getClientIp(c)
+  const ipHash = await hashIp(ip, c.env.IP_HASH_SALT || 'dev')
+  await logAudit(c.env.DB, 'survey_update', ipHash, {
+    surveyId: id, slug: finalSlug, questionCount: codes.length,
+  })
+
+  return c.redirect(`/admin/surveys/${id}?updated=1`)
 })
 
 // ============================================================

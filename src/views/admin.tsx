@@ -165,19 +165,31 @@ const SurveyCard: FC<{ s: ListSurveysWithStatsRow }> = ({ s }) => {
 // ============================================================
 // Per-survey dashboard (the existing one, now scoped by survey)
 // ============================================================
-export const DashboardPage: FC<{ survey: Survey }> = ({ survey }) => {
+export const DashboardPage: FC<{ survey: Survey; brand?: Brand | null }> = ({ survey, brand }) => {
   const titleString = `${survey.title_nl} — admin`
+  // Build the public survey URL so the Share modal can copy / send it
+  const prefix = brand?.url_prefix || (survey.brand_id === 'huiskamer' ? 'h' : 'e')
+  const publicPath = `/${prefix}/${survey.slug}`
   return (
     <Layout title={titleString} admin>
       <header class="admin-header">
         <a href="/admin" class="btn btn-ghost" style="margin-right:auto;">← Alle enquêtes</a>
         <h1 style="margin:0 0 0 16px;">⌂ {survey.title_nl}</h1>
         <div class="spacer"></div>
+        <button id="shareBtn" class="btn btn-teal" type="button"
+          data-survey-path={publicPath}
+          data-survey-title={survey.title_nl}
+          title="Deel deze enquête via WhatsApp, e-mail of link kopiëren">🔗 Delen</button>
+        <a href={`/admin/surveys/${survey.id}/edit`} class="btn btn-ghost"
+           title="Pas titel, vragen of details aan">⚙ Bewerken</a>
         <button id="refreshBtn" class="btn btn-ghost" type="button">↻ Vernieuwen</button>
         <a href="/admin/logout" class="btn btn-ghost">Uitloggen</a>
       </header>
 
       <main class="admin-main" data-survey-id={String(survey.id)} data-survey-slug={survey.slug} data-brand-prefix={survey.brand_id === 'huiskamer' ? 'h' : survey.brand_id === 'ebdiep' ? 'e' : 'h'}>
+        {/* Success banner shown after create/update redirects (admin.js fades it out) */}
+        <div id="flashBanner" class="flash-banner no-print" hidden></div>
+
         <div class="export-bar no-print">
           <span class="label">Export &amp; beheer:</span>
           <a href={`/api/admin/export?format=csv&survey=${survey.id}`} class="btn">⬇ Export CSV</a>
@@ -272,6 +284,38 @@ export const DashboardPage: FC<{ survey: Survey }> = ({ survey }) => {
         <div class="pdf-overlay-card">
           <div class="pdf-spinner" aria-hidden="true"></div>
           <p id="pdfOverlayMsg">PDF wordt gegenereerd…</p>
+        </div>
+      </div>
+
+      {/* Share modal — populated by admin.js when 🔗 Delen is clicked */}
+      <div id="shareModal" class="share-modal no-print" hidden role="dialog" aria-labelledby="shareTitle" aria-modal="true">
+        <div class="share-modal-card">
+          <button type="button" class="share-modal-close" id="shareClose" aria-label="Sluiten">×</button>
+          <h2 id="shareTitle">🔗 Deel deze enquête</h2>
+          <p class="share-hint">Verstuur de directe link naar deelnemers via WhatsApp, e-mail of kopieer hem.</p>
+
+          <div class="share-url-row">
+            <input type="text" id="shareUrl" class="share-url-input" readOnly />
+            <button type="button" id="shareCopy" class="btn btn-teal">📋 Kopieer</button>
+          </div>
+          <p class="share-copied" id="shareCopied" hidden>✓ Link gekopieerd naar klembord</p>
+
+          <div class="share-buttons">
+            <a id="shareWhatsapp" class="share-btn share-btn-whatsapp" target="_blank" rel="noopener noreferrer">
+              <span class="share-icon">💬</span>
+              <span>Verstuur via WhatsApp</span>
+            </a>
+            <a id="shareEmail" class="share-btn share-btn-email">
+              <span class="share-icon">✉️</span>
+              <span>Verstuur via e-mail</span>
+            </a>
+          </div>
+
+          <div class="share-qr-block">
+            <h3>📱 QR-code (voor flyer of scherm)</h3>
+            <div id="shareQr" class="share-qr"></div>
+            <a id="shareQrDownload" class="btn btn-ghost btn-small" download="qr-code.png" hidden>⬇ Download QR (PNG)</a>
+          </div>
         </div>
       </div>
 
@@ -488,6 +532,184 @@ export const NewSurveyPage: FC<{
             <a href="/admin" class="btn btn-ghost">Annuleren</a>
             <span class="spacer"></span>
             <button type="submit" class="btn btn-teal" id="submitBtn">Enquête aanmaken</button>
+          </section>
+        </form>
+      </main>
+
+      <script src={v('/static/admin-new-survey.js')} defer></script>
+    </Layout>
+  )
+}
+
+// ============================================================
+// Edit existing survey — same shape as NewSurveyPage but pre-filled,
+// brand is read-only, submit goes to POST /admin/surveys/:id
+// ============================================================
+
+export const EditSurveyPage: FC<{
+  survey: Survey
+  brands: Brand[]
+  questions: LibraryQuestion[]
+  error?: string
+}> = ({ survey, brands, questions, error }) => {
+  const groups = groupQuestions(questions)
+  const brand = brands.find(b => b.id === survey.brand_id)
+  const selectedSet = new Set(survey.question_codes)
+  const prefix = brand?.url_prefix || (survey.brand_id === 'huiskamer' ? 'h' : 'e')
+
+  return (
+    <Layout title={`${survey.title_nl} — bewerken`} admin>
+      <header class="admin-header">
+        <a href={`/admin/surveys/${survey.id}`} class="btn btn-ghost" style="margin-right:auto;">← Terug naar dashboard</a>
+        <h1 style="margin:0 0 0 16px;">⚙ Bewerken: {survey.title_nl}</h1>
+        <div class="spacer"></div>
+        <a href="/admin/logout" class="btn btn-ghost">Uitloggen</a>
+      </header>
+
+      <main class="admin-main new-survey-form" data-mode="edit" data-current-slug={survey.slug} data-survey-id={String(survey.id)} data-brand-prefix={prefix}>
+        {error ? (
+          <div class="form-error" role="alert">
+            <strong>Niet opgeslagen:</strong> {error}
+          </div>
+        ) : null}
+
+        <form method="POST" action={`/admin/surveys/${survey.id}`} id="newSurveyForm" autocomplete="off">
+          {/* ───────── Brand (read-only) ───────── */}
+          <section class="admin-section">
+            <h2>1. Merk</h2>
+            <p class="form-hint">
+              Het merk staat vast: enquêtes verplaatsen tussen merken zou bestaande URL's en responses breken.
+              Wil je toch wisselen? Maak een nieuwe enquête aan onder het andere merk.
+            </p>
+            <div class="brand-readonly" style={brand ? `--brand-primary:${brand.primary_color};--brand-accent:${brand.accent_color};` : ''}>
+              {brand?.logo_url ? <img src={brand.logo_url} alt={brand.name_nl} class="brand-radio-logo" /> : null}
+              <div class="brand-radio-text">
+                <strong>{brand?.name_nl ?? survey.brand_id}</strong>
+                <span class="brand-radio-prefix">/{prefix}/&lt;slug&gt;</span>
+              </div>
+              <input type="hidden" name="brand_id" value={survey.brand_id} />
+            </div>
+          </section>
+
+          {/* ───────── Titles & metadata ───────── */}
+          <section class="admin-section">
+            <h2>2. Titel &amp; details</h2>
+            <div class="form-grid">
+              <div class="form-field">
+                <label for="title_nl">Titel (NL) <span class="req">*</span></label>
+                <input type="text" id="title_nl" name="title_nl" required
+                  value={survey.title_nl} maxLength={150} />
+              </div>
+              <div class="form-field">
+                <label for="title_en">Titel (EN)</label>
+                <input type="text" id="title_en" name="title_en"
+                  value={survey.title_en} maxLength={150} />
+              </div>
+
+              <div class="form-field full">
+                <label for="subtitle_nl">Ondertitel (NL)</label>
+                <input type="text" id="subtitle_nl" name="subtitle_nl"
+                  value={survey.subtitle_nl ?? ''} maxLength={200} />
+              </div>
+              <div class="form-field full">
+                <label for="subtitle_en">Ondertitel (EN)</label>
+                <input type="text" id="subtitle_en" name="subtitle_en"
+                  value={survey.subtitle_en ?? ''} maxLength={200} />
+              </div>
+
+              <div class="form-field">
+                <label for="series_name">Reeks / serie</label>
+                <input type="text" id="series_name" name="series_name"
+                  value={survey.series_name ?? ''} maxLength={80} />
+              </div>
+              <div class="form-field">
+                <label for="artist">Artiest(en)</label>
+                <input type="text" id="artist" name="artist"
+                  value={survey.artist ?? ''} maxLength={120} />
+              </div>
+
+              <div class="form-field">
+                <label for="concert_date">Datum concert</label>
+                <input type="date" id="concert_date" name="concert_date"
+                  value={survey.concert_date ?? ''} />
+              </div>
+              <div class="form-field">
+                <label for="location">Locatie</label>
+                <input type="text" id="location" name="location"
+                  value={survey.location ?? ''} maxLength={120} />
+              </div>
+
+              <div class="form-field">
+                <label for="status">Status</label>
+                <select id="status" name="status">
+                  <option value="open" {...(survey.status === 'open' ? { selected: true } : {})}>Open (zichtbaar op landing)</option>
+                  <option value="closed" {...(survey.status === 'closed' ? { selected: true } : {})}>Gesloten</option>
+                  <option value="archived" {...(survey.status === 'archived' ? { selected: true } : {})}>Gearchiveerd</option>
+                </select>
+              </div>
+              <div class="form-field">
+                <label for="lang_default">Standaardtaal</label>
+                <select id="lang_default" name="lang_default">
+                  <option value="nl" {...(survey.lang_default === 'nl' ? { selected: true } : {})}>Nederlands</option>
+                  <option value="en" {...(survey.lang_default === 'en' ? { selected: true } : {})}>Engels</option>
+                </select>
+              </div>
+            </div>
+          </section>
+
+          {/* ───────── Slug / URL ───────── */}
+          <section class="admin-section">
+            <h2>3. URL</h2>
+            <p class="form-hint">
+              Pas alleen aan als je écht een nieuwe URL wil. <strong>Let op:</strong> oude links blijven niet werken
+              als je de slug verandert.
+            </p>
+            <div class="slug-row">
+              <span class="slug-prefix" id="slugPrefix">/{prefix}/</span>
+              <input type="text" id="slug" name="slug" maxLength={80}
+                value={survey.slug} pattern="[a-z0-9\-]+" autocapitalize="off" autocorrect="off" spellcheck={false} />
+              <span class="slug-status" id="slugStatus"></span>
+            </div>
+            <p class="form-helper">
+              Huidige URL: <code>/{prefix}/{survey.slug}</code>
+            </p>
+          </section>
+
+          {/* ───────── Question picker ───────── */}
+          <section class="admin-section">
+            <h2>4. Vragen</h2>
+            <div class="form-actions-inline">
+              <span class="form-hint">Voeg vragen toe of haal ze weg (geselecteerde: <strong id="qCount">{survey.question_codes.length}</strong>).</span>
+              <span class="spacer"></span>
+              <button type="button" class="btn btn-ghost btn-small" id="qSelectAll">Alles aan</button>
+              <button type="button" class="btn btn-ghost btn-small" id="qSelectNone">Alles uit</button>
+            </div>
+
+            {groups.map(({ category, items }) => (
+              <div class="question-group">
+                <h3 class="question-group-title">{CATEGORY_LABELS[category] ?? category}</h3>
+                <div class="question-list">
+                  {items.map(q => {
+                    const checkedAttr = selectedSet.has(q.code) ? { checked: true } : {}
+                    return (
+                      <label class="question-item">
+                        <input type="checkbox" name="question_codes" value={q.code} class="q-check" {...checkedAttr} />
+                        <span class="q-code">{q.code}</span>
+                        <span class="q-text">{q.label_nl}</span>
+                        <span class="q-type">{q.type}{q.required ? ' · verplicht' : ''}</span>
+                      </label>
+                    )
+                  })}
+                </div>
+              </div>
+            ))}
+          </section>
+
+          {/* ───────── Submit ───────── */}
+          <section class="admin-section form-submit-row">
+            <a href={`/admin/surveys/${survey.id}`} class="btn btn-ghost">Annuleren</a>
+            <span class="spacer"></span>
+            <button type="submit" class="btn btn-teal" id="submitBtn">Wijzigingen opslaan</button>
           </section>
         </form>
       </main>

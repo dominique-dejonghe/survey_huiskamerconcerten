@@ -32,6 +32,7 @@ Brand kleuren worden via CSS custom properties (`--brand-primary`, `--brand-acce
 | **Admin overzicht** | https://huiskamerconcerten-survey.pages.dev/admin |
 | **Nieuwe enquête aanmaken** | https://huiskamerconcerten-survey.pages.dev/admin/surveys/new |
 | **Per-survey dashboard** | https://huiskamerconcerten-survey.pages.dev/admin/surveys/1 |
+| **Enquête bewerken** | https://huiskamerconcerten-survey.pages.dev/admin/surveys/1/edit |
 | **Bedankpagina (NL)** | https://huiskamerconcerten-survey.pages.dev/h/<slug>/dank-je |
 | **Privacy (NL)** | https://huiskamerconcerten-survey.pages.dev/privacy |
 | **Health check** | https://huiskamerconcerten-survey.pages.dev/api/health |
@@ -156,15 +157,18 @@ npx wrangler d1 execute huiskamerconcerten-prod --remote --command="INSERT INTO 
 ✅ **Authenticatie** — HMAC-signed session cookie, e-mail+wachtwoord
 ✅ **Rate limiting** — 5 submits/IP/uur via SHA-256 hash
 ✅ **Audit log** — alle admin acties (login, delete, export, AI generate)
-✅ **Migration toegepast lokaal + productie** — 5 migrations, brands, surveys, questions tabellen
+✅ **Migration toegepast lokaal + productie** — 6 migrations, brands, surveys, questions tabellen
 ✅ **Admin form: nieuwe enquête aanmaken** — `/admin/surveys/new` met brand-keuze, auto-slug, live availability-check, question picker met "kopieer van bestaande"
+✅ **Admin form: bestaande enquête bewerken** — `/admin/surveys/:id/edit` past titel, ondertitel, vragen, status, slug, datums aan; brand staat vast (zou bestaande URLs/responses breken). Slug-wijziging werkt maar oude links stoppen.
+✅ **Deel-knop op dashboard** — modal met directe URL (kopieer-naar-klembord), WhatsApp-link (`wa.me/?text=...`), e-mail (`mailto:...`), én een QR-code (via api.qrserver.com) voor flyers/schermen
+✅ **Success flash banner** — groene "✓ Wijzigingen opgeslagen" / "Enquête aangemaakt" notice bij redirect
 
 ## Features Not Yet Implemented
 
 ⏳ **Question editor in admin** — vragen toevoegen/wijzigen via UI (nu enkel via migration)
-⏳ **Edit/clone bestaande survey** — momenteel kan een survey enkel aangemaakt worden, niet gewijzigd
 ⏳ **Survey duplicate** — kopieer een survey als basis voor een nieuwe
-⏳ **Bulk e-mail uitnodigingen** vanuit admin
+⏳ **Survey delete** vanuit admin (nu enkel status → archived)
+⏳ **Bulk e-mail uitnodigingen** vanuit admin (Share-knop biedt nu enkel 1-per-1 link)
 ⏳ **Per-survey Resend-template** voor confirmation/notification mails
 ⏳ **Multi-tenant isolatie** — momenteel ziet één admin alle surveys; eventueel per-brand admin
 ⏳ **Brand-specifieke header/hero polish** voor Ebdiep (nu enkel kleurwissel)
@@ -172,9 +176,9 @@ npx wrangler d1 execute huiskamerconcerten-prod --remote --command="INSERT INTO 
 
 ## Recommended Next Steps
 
-1. **Maak eerste echte Ebdiepconcerten survey** via `/admin/surveys/new` (geen SQL meer nodig!)
-2. **Edit-functionaliteit** — wijzigen van bestaande surveys (titel, status, vragen)
-3. **Question library editor** — vragen toevoegen/wijzigen vanuit admin
+1. **Question library editor** — vragen toevoegen/wijzigen vanuit admin (nu enkel via SQL migration)
+2. **Survey duplicate / archive / delete** vanuit admin overzicht
+3. **Bulk e-mail uitnodigingen** — koppel adressenlijst aan een survey en verstuur via Resend
 4. **Ebdiep-specifieke hero/header design** beyond just kleurwissel
 
 ---

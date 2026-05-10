@@ -1,11 +1,17 @@
-// admin-new-survey.js — interactivity for /admin/surveys/new
-// - Auto-slugify from title (only when slug is empty / untouched)
-// - Brand prefix indicator on slug input
-// - Live slug-availability check (debounced)
+// admin-new-survey.js — interactivity for /admin/surveys/new AND /admin/surveys/:id/edit
+// - Auto-slugify from title (only when slug is empty / untouched, and never in edit mode)
+// - Brand prefix indicator on slug input (read from radio in new mode, dataset in edit mode)
+// - Live slug-availability check (debounced) — current slug is treated as "free" in edit mode
 // - Question count + select all/none / copy-from-existing
 // - Submit guard: require >= 1 question
 (function () {
   'use strict';
+
+  // ----- mode detection -----
+  var mainEl = document.querySelector('.admin-main.new-survey-form');
+  var isEditMode = mainEl && mainEl.getAttribute('data-mode') === 'edit';
+  var currentSlug = mainEl ? (mainEl.getAttribute('data-current-slug') || '') : '';
+  var fixedBrandPrefix = mainEl ? mainEl.getAttribute('data-brand-prefix') : null; // edit mode
 
   // ----- helpers -----
   function $(sel) { return document.querySelector(sel); }
@@ -45,11 +51,21 @@
   var form = $('#newSurveyForm');
 
   // ----- state -----
-  var slugTouched = false; // user typed in slug → stop auto-fill from title
+  // In edit mode: slug already has a value, treat it as "touched" so we never
+  // overwrite from the title input (user must explicitly retype the slug).
+  var slugTouched = isEditMode;
   var lastSlugCheck = ''; // avoid duplicate checks
 
   // ----- 1. Brand prefix on slug + form preview -----
   function getSelectedBrand() {
+    // Edit mode: brand is fixed via hidden input; read prefix from data-attr.
+    if (isEditMode) {
+      var hidden = document.querySelector('input[name="brand_id"]');
+      return {
+        id: hidden ? hidden.value : '',
+        prefix: fixedBrandPrefix || 'h',
+      };
+    }
     for (var i = 0; i < brandRadios.length; i++) {
       if (brandRadios[i].checked) {
         return {
@@ -73,14 +89,21 @@
   function updateSlugPrefix() {
     var b = getSelectedBrand();
     if (slugPrefix) slugPrefix.textContent = '/' + b.prefix + '/';
-    // brand changed → re-check current slug
-    if (slugInput && slugInput.value) checkSlugAvailability();
+    // brand changed → re-check current slug (only if checker already initialised)
+    if (slugInput && slugInput.value && typeof checkSlugAvailability === 'function') {
+      checkSlugAvailability();
+    }
   }
 
   brandRadios.forEach(function (r) {
     r.addEventListener('change', updateSlugPrefix);
   });
-  updateSlugPrefix();
+  // Set the prefix synchronously, but defer the slug-check until after this
+  // module finishes initialising (so checkSlugAvailability is defined below).
+  (function initialPrefixOnly() {
+    var b = getSelectedBrand();
+    if (slugPrefix) slugPrefix.textContent = '/' + b.prefix + '/';
+  })();
 
   // ----- 2. Auto-slugify title -----
   if (titleInput && slugInput) {
@@ -105,7 +128,9 @@
   }
 
   // ----- 3. Live slug check -----
-  var checkSlugAvailability = debounce(function () {
+  // Wrapped function declaration so it's hoisted — updateSlugPrefix() above
+  // calls it during init before its body would otherwise be assigned.
+  var _doSlugCheck = debounce(function () {
     if (!slugInput || !slugStatus) return;
     var slug = slugInput.value.trim();
     if (!slug) {
@@ -130,8 +155,10 @@
           slugStatus.className = 'slug-status';
           return;
         }
-        if (data.free) {
-          slugStatus.textContent = '✓ vrij';
+        // In edit mode, the survey's own current slug should display as OK.
+        var ownSlug = isEditMode && slug === currentSlug;
+        if (data.free || ownSlug) {
+          slugStatus.textContent = ownSlug && !data.free ? '✓ huidige' : '✓ vrij';
           slugStatus.className = 'slug-status free';
         } else {
           slugStatus.textContent = '✗ al in gebruik';
@@ -143,6 +170,7 @@
         slugStatus.className = 'slug-status';
       });
   }, 350);
+  function checkSlugAvailability() { _doSlugCheck(); }
 
   // ----- 4. Question count + helpers -----
   function updateCount() {
@@ -174,18 +202,25 @@
     qCopyFrom.value = '';
   });
 
+  // ----- 4b. Initial slug check (deferred until checkSlugAvailability is defined) -----
+  if (slugInput && slugInput.value) {
+    checkSlugAvailability();
+  }
+
   // ----- 5. Submit guard -----
   if (form && submitBtn) {
     form.addEventListener('submit', function (e) {
       var n = qChecks.filter(function (c) { return c.checked; }).length;
       if (n === 0) {
         e.preventDefault();
-        alert('Selecteer minstens één vraag voor je de enquête aanmaakt.');
+        alert(isEditMode
+          ? 'Selecteer minstens één vraag voor je opslaat.'
+          : 'Selecteer minstens één vraag voor je de enquête aanmaakt.');
         return;
       }
       // disable to prevent double-submit
       submitBtn.disabled = true;
-      submitBtn.textContent = 'Aanmaken…';
+      submitBtn.textContent = isEditMode ? 'Opslaan…' : 'Aanmaken…';
     });
   }
 })();

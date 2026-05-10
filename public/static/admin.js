@@ -278,6 +278,30 @@
       });
   }
 
+  // Flash banner — show success message after create/update redirect.
+  // The server redirects to ?created=1 or ?updated=1 — we read & remove it
+  // from the URL so a refresh doesn't re-show it.
+  (function showFlashFromQuery() {
+    var banner = document.getElementById('flashBanner');
+    if (!banner) return;
+    var qs = new URLSearchParams(window.location.search);
+    var msg = '';
+    if (qs.get('created') === '1') msg = '✓ Enquête aangemaakt — je kunt hem nu bewerken of delen.';
+    else if (qs.get('updated') === '1') msg = '✓ Wijzigingen opgeslagen.';
+    if (!msg) return;
+    banner.textContent = msg;
+    banner.hidden = false;
+    setTimeout(function () {
+      banner.style.opacity = '0';
+      setTimeout(function () { banner.hidden = true; banner.style.opacity = ''; }, 400);
+    }, 4500);
+    // Clean URL so a refresh doesn't re-show it
+    qs.delete('created'); qs.delete('updated');
+    var newSearch = qs.toString();
+    var newUrl = window.location.pathname + (newSearch ? '?' + newSearch : '');
+    try { history.replaceState(null, '', newUrl); } catch (e) { /* ignore */ }
+  })();
+
   loadData();
   setInterval(loadData, 30000);
 
@@ -639,6 +663,100 @@
         docxBtn.disabled = false;
         docxBtn.textContent = original;
       }, 4000);
+    });
+  }
+
+  // ============================================================
+  // Share modal — WhatsApp / Email / Copy-to-clipboard / QR-code
+  // ============================================================
+  var shareBtn = document.getElementById('shareBtn');
+  var shareModal = document.getElementById('shareModal');
+  if (shareBtn && shareModal) {
+    var shareUrlInput = document.getElementById('shareUrl');
+    var shareCopyBtn = document.getElementById('shareCopy');
+    var shareCopiedMsg = document.getElementById('shareCopied');
+    var shareWhatsapp = document.getElementById('shareWhatsapp');
+    var shareEmail = document.getElementById('shareEmail');
+    var shareClose = document.getElementById('shareClose');
+    var shareQr = document.getElementById('shareQr');
+    var shareQrDownload = document.getElementById('shareQrDownload');
+
+    function buildShareData() {
+      var path = shareBtn.getAttribute('data-survey-path') || '/';
+      var title = shareBtn.getAttribute('data-survey-title') || 'enquête';
+      var url = window.location.origin + path;
+      // Friendly NL message — encoded for both WhatsApp and email body
+      var greeting = 'Hallo!';
+      var body = greeting + '\n\nWe horen graag wat je vond van het concert. ' +
+                 'Het invullen van deze korte enquête neemt slechts een paar minuten:\n\n' +
+                 url + '\n\nAlvast bedankt!\n— Pensato.org';
+      var subject = 'Jouw mening over ' + title;
+      return { url: url, title: title, body: body, subject: subject };
+    }
+
+    function openShareModal() {
+      var data = buildShareData();
+      shareUrlInput.value = data.url;
+      shareWhatsapp.href = 'https://wa.me/?text=' + encodeURIComponent(data.body);
+      shareEmail.href = 'mailto:?subject=' + encodeURIComponent(data.subject) +
+                       '&body=' + encodeURIComponent(data.body);
+      // QR-code via goqr.me public API (no auth, no rate limits for normal use)
+      var qrUrl = 'https://api.qrserver.com/v1/create-qr-code/?size=240x240&margin=8&data=' +
+                  encodeURIComponent(data.url);
+      shareQr.innerHTML = '<img src="' + qrUrl + '" alt="QR-code voor ' +
+                          data.url + '" width="240" height="240" />';
+      if (shareQrDownload) {
+        shareQrDownload.href = qrUrl + '&format=png&download=1';
+        shareQrDownload.hidden = false;
+      }
+      shareCopiedMsg.hidden = true;
+      shareModal.hidden = false;
+      // Move focus for accessibility
+      setTimeout(function () { shareUrlInput.focus(); shareUrlInput.select(); }, 50);
+    }
+
+    function closeShareModal() {
+      shareModal.hidden = true;
+      shareCopiedMsg.hidden = true;
+    }
+
+    shareBtn.addEventListener('click', openShareModal);
+    shareClose.addEventListener('click', closeShareModal);
+    shareModal.addEventListener('click', function (e) {
+      // Close on backdrop click (but not on the card itself)
+      if (e.target === shareModal) closeShareModal();
+    });
+    document.addEventListener('keydown', function (e) {
+      if (!shareModal.hidden && e.key === 'Escape') closeShareModal();
+    });
+
+    shareCopyBtn.addEventListener('click', function () {
+      var url = shareUrlInput.value;
+      function showCopied() {
+        shareCopiedMsg.hidden = false;
+        setTimeout(function () { shareCopiedMsg.hidden = true; }, 2500);
+      }
+      // Modern clipboard API with fallback for non-HTTPS contexts
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(url).then(showCopied, function () {
+          // fallback below
+          fallbackCopy();
+        });
+      } else {
+        fallbackCopy();
+      }
+      function fallbackCopy() {
+        try {
+          shareUrlInput.removeAttribute('readonly');
+          shareUrlInput.select();
+          shareUrlInput.setSelectionRange(0, 99999);
+          document.execCommand('copy');
+          shareUrlInput.setAttribute('readonly', 'readonly');
+          showCopied();
+        } catch (err) {
+          alert('Kon niet automatisch kopiëren. Selecteer de URL en gebruik Ctrl+C.');
+        }
+      }
     });
   }
 })();
