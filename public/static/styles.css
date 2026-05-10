@@ -1580,3 +1580,137 @@ body.survey-body { background: #FBF8F2; }
   transition: opacity .4s ease;
 }
 .flash-banner[hidden] { display: none; }
+
+/* ============================================================
+   Question library — list & editor
+   ============================================================ */
+.questions-library .question-category-block {
+  margin-bottom: 24px;
+}
+.questions-library .cat-count {
+  color: #888;
+  font-size: 0.85em;
+  font-weight: 400;
+  margin-left: 8px;
+}
+.questions-table {
+  font-size: 0.92rem;
+}
+.questions-table td {
+  vertical-align: top;
+  padding: 10px 12px;
+}
+.q-code-cell {
+  font-family: ui-monospace, SFMono-Regular, monospace;
+  font-size: 0.85rem;
+  background: #f0f4f6;
+  padding: 3px 8px;
+  border-radius: 5px;
+  color: #1a3a4a;
+  display: inline-block;
+}
+.q-label-cell strong {
+  display: block;
+  color: #1a3a4a;
+  font-weight: 600;
+}
+.q-label-cell .q-helper {
+  display: block;
+  color: #777;
+  font-size: 0.85rem;
+  margin-top: 2px;
+  font-style: italic;
+}
+.usage-count {
+  color: #2a8a92;
+  font-weight: 600;
+  cursor: help;
+  border-bottom: 1px dotted #2a8a92;
+}
+
+/* Type pills */
+.type-pill {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  background: #e3e8ec;
+  color: #1a3a4a;
+  white-space: nowrap;
+}
+.type-pill.type-nps { background: #fff4e1; color: #b87000; }
+.type-pill.type-scale { background: #e1f0ff; color: #1a5a96; }
+.type-pill.type-choice { background: #f0e3ff; color: #6b3a96; }
+.type-pill.type-text { background: #e3f5ea; color: #2E7D32; }
+.type-pill.type-paragraph { background: #d6f0db; color: #1f5f24; }
+
+/* Btn small variant */
+.btn-small {
+  font-size: 0.8rem;
+  padding: 5px 10px;
+  margin-left: 4px;
+}
+
+/* Usage warning notice on edit page */
+.usage-notice {
+  background: #fff8e1;
+  border-left: 4px solid #f4a93c;
+  padding: 12px 18px;
+  border-radius: 6px;
+  margin-bottom: 18px;
+  font-size: 0.92rem;
+  color: #5a4500;
+}
+.usage-notice a {
+  color: #b87000;
+  font-weight: 600;
+}
+.usage-notice strong { color: #4a3700; }
+
+/* Type-section toggling — hidden by default; JS adds inline display */
+/* (no CSS rule needed — display=none/'' is set by JS, default visible) */
+
+/* Checkbox & radio inline labels */
+.checkbox-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  font-weight: 400;
+  margin-top: 22px;
+}
+.checkbox-label input[type="checkbox"] {
+  width: 18px;
+  height: 18px;
+  cursor: pointer;
+}
+.radio-inline {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 14px;
+  border: 1.5px solid #d4dde2;
+  border-radius: 8px;
+  margin-top: 8px;
+  cursor: pointer;
+  transition: border-color .15s, background .15s;
+}
+.radio-inline:hover { border-color: #2a8a92; background: #f5fafa; }
+.radio-inline input[type="radio"] { margin-top: 3px; }
+.radio-inline strong { color: #1a3a4a; }
+
+/* Read-only code input (in edit mode) */
+input[readonly] {
+  background: #f5f7f9 !important;
+  color: #555;
+  cursor: not-allowed;
+}
+
+/* Disabled delete button stays visible but greyed */
+.btn-red:disabled {
+  background: #ddd !important;
+  color: #999 !important;
+  cursor: not-allowed;
+  opacity: 0.7;
+}

@@ -4,7 +4,10 @@ import { logger } from 'hono/logger'
 
 import { SurveyPage, ThanksPage, PrivacyPage } from './views/survey'
 import { LandingPage } from './views/landing'
-import { LoginPage, DashboardPage, AdminOverviewPage, NewSurveyPage, EditSurveyPage } from './views/admin'
+import {
+  LoginPage, DashboardPage, AdminOverviewPage, NewSurveyPage, EditSurveyPage,
+  QuestionsLibraryPage, QuestionEditorPage, QuestionsImportPage,
+} from './views/admin'
 import { responseSchema } from './lib/validation'
 import { hashIp } from './lib/crypto'
 import {
@@ -28,6 +31,9 @@ import {
   getBrandByPrefix, getSurveyBySlug, getSurveyById, getBrand,
   listLibraryQuestions, createSurvey, slugify, generateUniqueSlug,
   updateSurvey, generateUniqueSlugForUpdate,
+  getLibraryQuestion, createQuestion, updateQuestion, deleteQuestion,
+  validateQuestionInput, getSurveysUsingQuestion, importQuestions,
+  type QuestionInput,
 } from './lib/surveys'
 import type { Lang } from './lib/i18n'
 
@@ -468,6 +474,232 @@ app.post('/admin/surveys/:id', async (c) => {
   })
 
   return c.redirect(`/admin/surveys/${id}?updated=1`)
+})
+
+// ============================================================
+// QUESTION LIBRARY — full CRUD
+// ============================================================
+
+// Helper: parse form body into QuestionInput shape
+function parseQuestionForm(form: FormData): Partial<QuestionInput> {
+  const get = (k: string): string => {
+    const v = form.get(k)
+    return typeof v === 'string' ? v.trim() : ''
+  }
+  const splitLines = (s: string): string[] =>
+    s.split(/\r?\n/).map(x => x.trim()).filter(x => x.length > 0)
+
+  const type = get('type') as QuestionInput['type']
+  const sMin = get('scale_min')
+  const sMax = get('scale_max')
+  const cf = get('cond_field')
+  const cv = get('cond_value')
+
+  return {
+    code: get('code'),
+    type,
+    category: get('category') || null,
+    required: form.get('required') === 'on' || form.get('required') === '1',
+    scale_min: sMin === '' ? null : Number(sMin),
+    scale_max: sMax === '' ? null : Number(sMax),
+    label_nl: get('label_nl'),
+    label_en: get('label_en'),
+    helper_nl: get('helper_nl') || null,
+    helper_en: get('helper_en') || null,
+    min_label_nl: get('min_label_nl') || null,
+    min_label_en: get('min_label_en') || null,
+    max_label_nl: get('max_label_nl') || null,
+    max_label_en: get('max_label_en') || null,
+    options_nl: type === 'choice' ? splitLines(get('options_nl')) : null,
+    options_en: type === 'choice' ? splitLines(get('options_en')) : null,
+    conditional_on: (cf && cv) ? { field: cf, value: cv } : null,
+  }
+}
+
+// List + show all questions
+app.get('/admin/questions', async (c) => {
+  const guard = await requireAdmin(c)
+  if (guard) return guard
+  const questions = await listLibraryQuestions(c.env.DB)
+  // Compute usage map: which surveys use which question
+  const surveys = await listSurveys(c.env.DB, {})
+  const usage = new Map<string, Array<{ id: number; title_nl: string; status: string }>>()
+  for (const s of surveys) {
+    for (const code of s.question_codes) {
+      if (!usage.has(code)) usage.set(code, [])
+      usage.get(code)!.push({ id: s.id, title_nl: s.title_nl, status: s.status })
+    }
+  }
+  return c.html(<QuestionsLibraryPage
+    questions={questions}
+    usage={Object.fromEntries(usage)}
+    flash={c.req.query('flash') || ''}
+    error={c.req.query('error') || ''}
+  />)
+})
+
+// New question form
+app.get('/admin/questions/new', async (c) => {
+  const guard = await requireAdmin(c)
+  if (guard) return guard
+  return c.html(<QuestionEditorPage mode="create" question={null}
+    error={c.req.query('error') || ''} formData={{}} />)
+})
+
+// JSON import: GET shows the page, POST executes the import.
+// IMPORTANT: must be declared BEFORE the generic /admin/questions/:code routes
+// below, otherwise Hono will treat "import" as a :code parameter.
+app.get('/admin/questions/import', async (c) => {
+  const guard = await requireAdmin(c)
+  if (guard) return guard
+  return c.html(<QuestionsImportPage error={c.req.query('error') || ''} />)
+})
+
+app.post('/admin/questions/import', async (c) => {
+  const guard = await requireAdmin(c)
+  if (guard) return guard
+  const form = await c.req.formData()
+  const json = String(form.get('json') || '').trim()
+  const mode = (String(form.get('mode') || 'skip') === 'replace' ? 'replace' : 'skip') as 'replace' | 'skip'
+  if (!json) {
+    return c.redirect('/admin/questions/import?error=' + encodeURIComponent('Plak eerst JSON in het tekstveld.'))
+  }
+  let parsed: any
+  try { parsed = JSON.parse(json) }
+  catch (e) {
+    return c.redirect('/admin/questions/import?error=' + encodeURIComponent(
+      'Ongeldige JSON: ' + (e instanceof Error ? e.message : 'parse error'),
+    ))
+  }
+  const rows: any[] = Array.isArray(parsed) ? parsed : (Array.isArray(parsed.questions) ? parsed.questions : [])
+  if (rows.length === 0) {
+    return c.redirect('/admin/questions/import?error=' + encodeURIComponent(
+      'Geen vragen gevonden — verwacht een JSON-array of object met "questions": [...].',
+    ))
+  }
+  const allErrs: string[] = []
+  const inputs: QuestionInput[] = []
+  for (let i = 0; i < rows.length; i++) {
+    const r = rows[i]
+    const coerced = { ...r, required: r.required === true || r.required === 1 || r.required === '1' }
+    const errs = validateQuestionInput(coerced)
+    if (errs.length > 0) {
+      allErrs.push(`Rij ${i + 1} (${r.code || '?'}): ${errs.join('; ')}`)
+    } else {
+      inputs.push(coerced as QuestionInput)
+    }
+  }
+  if (allErrs.length > 0) {
+    return c.redirect('/admin/questions/import?error=' + encodeURIComponent(allErrs.join(' · ')))
+  }
+  const result = await importQuestions(c.env.DB, inputs, mode)
+  const ip = getClientIp(c)
+  const ipHash = await hashIp(ip, c.env.IP_HASH_SALT || 'dev')
+  await logAudit(c.env.DB, 'question_import', ipHash, { ...result, mode })
+  return c.redirect('/admin/questions?flash=' + encodeURIComponent(
+    `Import voltooid: ${result.inserted} nieuw, ${result.updated} bijgewerkt, ${result.skipped} overgeslagen.`,
+  ))
+})
+
+// Edit question form
+app.get('/admin/questions/:code/edit', async (c) => {
+  const guard = await requireAdmin(c)
+  if (guard) return guard
+  const code = c.req.param('code')
+  const q = await getLibraryQuestion(c.env.DB, code)
+  if (!q) return c.notFound()
+  const usage = await getSurveysUsingQuestion(c.env.DB, code)
+  return c.html(<QuestionEditorPage mode="edit" question={q} usage={usage}
+    error={c.req.query('error') || ''} formData={{}} />)
+})
+
+// Create question
+app.post('/admin/questions', async (c) => {
+  const guard = await requireAdmin(c)
+  if (guard) return guard
+  const form = await c.req.formData()
+  const input = parseQuestionForm(form)
+  const errs = validateQuestionInput(input)
+  // Code must be unique
+  if (input.code && errs.length === 0) {
+    const existing = await getLibraryQuestion(c.env.DB, input.code)
+    if (existing) errs.push(`Een vraag met code "${input.code}" bestaat al.`)
+  }
+  if (errs.length > 0) {
+    return c.redirect('/admin/questions/new?error=' + encodeURIComponent(errs.join(' · ')))
+  }
+  await createQuestion(c.env.DB, input as QuestionInput)
+  const ip = getClientIp(c)
+  const ipHash = await hashIp(ip, c.env.IP_HASH_SALT || 'dev')
+  await logAudit(c.env.DB, 'question_create', ipHash, { code: input.code })
+  return c.redirect('/admin/questions?flash=' + encodeURIComponent(`Vraag "${input.code}" toegevoegd.`))
+})
+
+// Update question
+app.post('/admin/questions/:code', async (c) => {
+  const guard = await requireAdmin(c)
+  if (guard) return guard
+  const code = c.req.param('code')
+  const existing = await getLibraryQuestion(c.env.DB, code)
+  if (!existing) {
+    return c.redirect('/admin/questions?error=' + encodeURIComponent(
+      `Vraag "${code}" bestaat niet (meer).`,
+    ))
+  }
+  const form = await c.req.formData()
+  // Force the code from URL (immutable)
+  const input = { ...parseQuestionForm(form), code }
+  const errs = validateQuestionInput(input)
+  if (errs.length > 0) {
+    return c.redirect(`/admin/questions/${code}/edit?error=` + encodeURIComponent(errs.join(' · ')))
+  }
+  // type changes are allowed but warn the user via the UI; backend just persists.
+  const { code: _, ...rest } = input as QuestionInput
+  await updateQuestion(c.env.DB, code, rest)
+  const ip = getClientIp(c)
+  const ipHash = await hashIp(ip, c.env.IP_HASH_SALT || 'dev')
+  await logAudit(c.env.DB, 'question_update', ipHash, { code })
+  return c.redirect('/admin/questions?flash=' + encodeURIComponent(`Vraag "${code}" bijgewerkt.`))
+})
+
+// Delete question (with usage check)
+app.post('/admin/questions/:code/delete', async (c) => {
+  const guard = await requireAdmin(c)
+  if (guard) return guard
+  const code = c.req.param('code')
+  const existing = await getLibraryQuestion(c.env.DB, code)
+  if (!existing) {
+    return c.redirect('/admin/questions?error=' + encodeURIComponent(
+      `Vraag "${code}" bestaat niet (meer).`,
+    ))
+  }
+  // Hard guard: refuse delete if any survey still references the code
+  const usage = await getSurveysUsingQuestion(c.env.DB, code)
+  if (usage.length > 0) {
+    const titles = usage.map(u => `"${u.title_nl}"`).join(', ')
+    return c.redirect('/admin/questions?error=' + encodeURIComponent(
+      `Vraag "${code}" wordt nog gebruikt in ${usage.length} enquête(s): ${titles}. Verwijder eerst de vraag uit die enquêtes.`,
+    ))
+  }
+  await deleteQuestion(c.env.DB, code)
+  const ip = getClientIp(c)
+  const ipHash = await hashIp(ip, c.env.IP_HASH_SALT || 'dev')
+  await logAudit(c.env.DB, 'question_delete', ipHash, { code })
+  return c.redirect('/admin/questions?flash=' + encodeURIComponent(`Vraag "${code}" verwijderd.`))
+})
+
+// JSON export of full library — handy as a backup or to copy to another deployment
+app.get('/api/admin/questions/export', async (c) => {
+  const guard = await requireAdmin(c)
+  if (guard) return guard
+  const questions = await listLibraryQuestions(c.env.DB)
+  const today = new Date().toISOString().slice(0, 10)
+  return new Response(JSON.stringify({ exported_at: new Date().toISOString(), questions }, null, 2), {
+    headers: {
+      'Content-Type': 'application/json; charset=utf-8',
+      'Content-Disposition': `attachment; filename="questions-library-${today}.json"`,
+    },
+  })
 })
 
 // ============================================================

@@ -74,6 +74,7 @@ export const AdminOverviewPage: FC<{
       <header class="admin-header">
         <h1>📊 Pensato.org · admin</h1>
         <div class="spacer"></div>
+        <a href="/admin/questions" class="btn btn-ghost" title="Beheer de vragen-bibliotheek">📚 Vragenbibliotheek</a>
         <a href="/admin/logout" class="btn btn-ghost">Uitloggen</a>
       </header>
       <main class="admin-main">
@@ -715,6 +716,456 @@ export const EditSurveyPage: FC<{
       </main>
 
       <script src={v('/static/admin-new-survey.js')} defer></script>
+    </Layout>
+  )
+}
+
+// ============================================================
+// QUESTION LIBRARY — list page
+// ============================================================
+
+const TYPE_LABELS: Record<string, string> = {
+  nps: 'NPS (0-10)',
+  scale: 'Schaal (1-5)',
+  choice: 'Keuze',
+  text: 'Tekst (kort)',
+  paragraph: 'Tekst (lang)',
+}
+
+export const QuestionsLibraryPage: FC<{
+  questions: LibraryQuestion[]
+  usage: Record<string, Array<{ id: number; title_nl: string; status: string }>>
+  flash?: string
+  error?: string
+}> = ({ questions, usage, flash, error }) => {
+  // Group by category
+  const groups = (() => {
+    const map = new Map<string, LibraryQuestion[]>()
+    for (const q of questions) {
+      const cat = q.category || 'overig'
+      if (!map.has(cat)) map.set(cat, [])
+      map.get(cat)!.push(q)
+    }
+    const order = ['algemeen', 'locatie', 'muzikaal', 'jos', 'organisatie', 'reeks2', 'totslot']
+    return Array.from(map.entries()).sort((a, b) => {
+      const ai = order.indexOf(a[0]); const bi = order.indexOf(b[0])
+      if (ai === -1 && bi === -1) return a[0].localeCompare(b[0])
+      if (ai === -1) return 1
+      if (bi === -1) return -1
+      return ai - bi
+    })
+  })()
+
+  return (
+    <Layout title="Vragenbibliotheek — admin" admin>
+      <header class="admin-header">
+        <a href="/admin" class="btn btn-ghost" style="margin-right:auto;">← Alle enquêtes</a>
+        <h1 style="margin:0 0 0 16px;">📚 Vragenbibliotheek</h1>
+        <div class="spacer"></div>
+        <a href="/admin/questions/import" class="btn btn-ghost" title="Bulk-import via JSON">⬆ Importeer</a>
+        <a href="/api/admin/questions/export" class="btn btn-ghost" title="Download alle vragen als JSON">⬇ Exporteer</a>
+        <a href="/admin/questions/new" class="btn btn-teal">+ Nieuwe vraag</a>
+        <a href="/admin/logout" class="btn btn-ghost">Uitloggen</a>
+      </header>
+
+      <main class="admin-main questions-library">
+        {flash ? <div id="flashBanner" class="flash-banner no-print">{flash}</div> : null}
+        {error ? <div class="form-error" role="alert"><strong>Fout:</strong> {error}</div> : null}
+
+        <section class="admin-section overview-hero">
+          <h2 style="margin-top:0;">Bibliotheek</h2>
+          <p style="color:#555;">
+            {questions.length} vragen · gegroepeerd per categorie · enquêtes mengen vragen uit deze bibliotheek.
+          </p>
+          <p class="form-hint" style="margin-bottom:0;">
+            <strong>Belangrijk:</strong> de <code>code</code> van een vraag is de identifier — die kan je niet wijzigen na aanmaken.
+            Wijzig je het type van een bestaande vraag, dan blijven oude antwoorden in de oude vorm bewaard
+            (de admin-tabel toont ze nog correct).
+          </p>
+        </section>
+
+        <input type="search" id="qFilter" class="search-input" placeholder="Filter op code, label of categorie…"
+               style="margin-bottom:16px;" />
+
+        {groups.length === 0
+          ? <p style="color:#777;font-style:italic;">Nog geen vragen. Klik op <strong>+ Nieuwe vraag</strong> of <strong>⬆ Importeer</strong>.</p>
+          : groups.map(([cat, items]) => (
+            <section class="admin-section question-category-block" data-category={cat}>
+              <h2>{CATEGORY_LABELS[cat] ?? cat} <span class="cat-count">({items.length})</span></h2>
+              <table class="data-table questions-table">
+                <thead>
+                  <tr>
+                    <th style="width:11%;">Code</th>
+                    <th style="width:9%;">Type</th>
+                    <th>Label NL</th>
+                    <th style="width:7%;text-align:center;">Verplicht</th>
+                    <th style="width:14%;">Gebruikt in</th>
+                    <th style="width:14%;text-align:right;">Acties</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {items.map(q => {
+                    const surveys = usage[q.code] ?? []
+                    return (
+                      <tr class="question-row"
+                          data-search={(q.code + ' ' + q.label_nl + ' ' + (q.category || '')).toLowerCase()}>
+                        <td><code class="q-code-cell">{q.code}</code></td>
+                        <td><span class={`type-pill type-${q.type}`}>{TYPE_LABELS[q.type] ?? q.type}</span></td>
+                        <td class="q-label-cell">
+                          <strong>{q.label_nl}</strong>
+                          {q.helper_nl ? <span class="q-helper">{q.helper_nl}</span> : null}
+                        </td>
+                        <td style="text-align:center;">{q.required ? '✓' : '—'}</td>
+                        <td>
+                          {surveys.length === 0
+                            ? <span style="color:#999;font-style:italic;">ongebruikt</span>
+                            : <span class="usage-count" title={surveys.map(s => s.title_nl).join(', ')}>{surveys.length} enquête{surveys.length === 1 ? '' : 's'}</span>
+                          }
+                        </td>
+                        <td style="text-align:right;white-space:nowrap;">
+                          <a href={`/admin/questions/${q.code}/edit`} class="btn btn-ghost btn-small">⚙ Bewerk</a>
+                          <form method="POST" action={`/admin/questions/${q.code}/delete`} style="display:inline;"
+                                class="delete-form" data-code={q.code} data-usage={String(surveys.length)}>
+                            <button type="submit" class="btn btn-red btn-small" {...(surveys.length > 0 ? { disabled: true, title: 'In gebruik — verwijder eerst uit alle enquêtes' } : { title: 'Verwijder definitief' })}>🗑</button>
+                          </form>
+                        </td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
+            </section>
+          ))
+        }
+      </main>
+
+      <script src={v('/static/admin-questions.js')} defer></script>
+    </Layout>
+  )
+}
+
+// ============================================================
+// QUESTION EDITOR — create or edit a question
+// ============================================================
+
+export const QuestionEditorPage: FC<{
+  mode: 'create' | 'edit'
+  question: LibraryQuestion | null
+  usage?: Array<{ id: number; title_nl: string; status: string }>
+  error?: string
+  formData?: Record<string, string>
+}> = ({ mode, question, usage, error }) => {
+  const isEdit = mode === 'edit'
+  const q = question
+  const action = isEdit ? `/admin/questions/${q!.code}` : '/admin/questions'
+  const heading = isEdit ? `⚙ Bewerk: ${q!.code}` : '+ Nieuwe vraag'
+  const submitLabel = isEdit ? 'Wijzigingen opslaan' : 'Vraag aanmaken'
+  const initialType = q?.type || 'text'
+
+  return (
+    <Layout title={`${isEdit ? q!.code : 'Nieuwe vraag'} — admin`} admin>
+      <header class="admin-header">
+        <a href="/admin/questions" class="btn btn-ghost" style="margin-right:auto;">← Vragenbibliotheek</a>
+        <h1 style="margin:0 0 0 16px;">{heading}</h1>
+        <div class="spacer"></div>
+        <a href="/admin/logout" class="btn btn-ghost">Uitloggen</a>
+      </header>
+
+      <main class="admin-main new-survey-form" data-question-mode={mode} data-initial-type={initialType}>
+        {error ? (
+          <div class="form-error" role="alert">
+            <strong>Niet opgeslagen:</strong> {error}
+          </div>
+        ) : null}
+
+        {isEdit && usage && usage.length > 0 ? (
+          <div class="usage-notice" role="note">
+            <strong>Let op:</strong> deze vraag wordt gebruikt in {usage.length} enquête{usage.length === 1 ? '' : 's'}:{' '}
+            {usage.map((u, i) => (
+              <span>
+                {i > 0 ? ', ' : ''}
+                <a href={`/admin/surveys/${u.id}`}>{u.title_nl}</a>
+              </span>
+            ))}.{' '}
+            Wijzigingen aan label/helper zijn meteen zichtbaar voor respondenten.
+            Wijzig <strong>het type</strong> alleen als er nog geen antwoorden binnen zijn.
+          </div>
+        ) : null}
+
+        <form method="POST" action={action} id="questionForm" autocomplete="off">
+          {/* ───────── Identifier ───────── */}
+          <section class="admin-section">
+            <h2>1. Identifier</h2>
+            <div class="form-grid">
+              <div class="form-field">
+                <label for="code">Code <span class="req">*</span></label>
+                <input type="text" id="code" name="code"
+                  value={q?.code ?? ''}
+                  required
+                  pattern="[a-z][a-z0-9_]*"
+                  maxLength={50}
+                  readOnly={isEdit}
+                  placeholder="bv. q21_inschrijven"
+                />
+                <span class="form-helper">
+                  {isEdit
+                    ? 'Code is de primary key — niet wijzigbaar na aanmaken.'
+                    : 'Begin met een kleine letter; alleen kleine letters, cijfers en underscores. Tip: behoud de q-prefix-conventie.'}
+                </span>
+              </div>
+              <div class="form-field">
+                <label for="category">Categorie</label>
+                <input type="text" id="category" name="category"
+                  value={q?.category ?? ''}
+                  list="catSuggestions"
+                  placeholder="bv. algemeen, locatie, muzikaal…" />
+                <datalist id="catSuggestions">
+                  <option value="algemeen" />
+                  <option value="locatie" />
+                  <option value="muzikaal" />
+                  <option value="jos" />
+                  <option value="organisatie" />
+                  <option value="reeks2" />
+                  <option value="totslot" />
+                </datalist>
+              </div>
+              <div class="form-field">
+                <label for="type">Type <span class="req">*</span></label>
+                <select id="type" name="type" required>
+                  {(['nps', 'scale', 'choice', 'text', 'paragraph'] as const).map(t => (
+                    <option value={t} {...(initialType === t ? { selected: true } : {})}>
+                      {TYPE_LABELS[t]}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div class="form-field">
+                <label class="checkbox-label">
+                  <input type="checkbox" name="required" value="1"
+                    {...(q?.required ? { checked: true } : {})} />
+                  <span>Verplicht (respondent moet antwoorden)</span>
+                </label>
+              </div>
+            </div>
+          </section>
+
+          {/* ───────── Labels ───────── */}
+          <section class="admin-section">
+            <h2>2. Vraagtekst</h2>
+            <div class="form-grid">
+              <div class="form-field full">
+                <label for="label_nl">Label NL <span class="req">*</span></label>
+                <input type="text" id="label_nl" name="label_nl" required
+                  value={q?.label_nl ?? ''}
+                  maxLength={300}
+                  placeholder="bv. Hoe ervoer je de huiskamer-setting?" />
+              </div>
+              <div class="form-field full">
+                <label for="label_en">Label EN <span class="req">*</span></label>
+                <input type="text" id="label_en" name="label_en" required
+                  value={q?.label_en ?? ''}
+                  maxLength={300}
+                  placeholder="e.g. How did you experience the intimate setting?" />
+              </div>
+              <div class="form-field full">
+                <label for="helper_nl">Helper NL</label>
+                <input type="text" id="helper_nl" name="helper_nl"
+                  value={q?.helper_nl ?? ''}
+                  maxLength={300}
+                  placeholder="Optionele toelichting onder de vraag" />
+              </div>
+              <div class="form-field full">
+                <label for="helper_en">Helper EN</label>
+                <input type="text" id="helper_en" name="helper_en"
+                  value={q?.helper_en ?? ''}
+                  maxLength={300} />
+              </div>
+            </div>
+          </section>
+
+          {/* ───────── Scale fields (nps/scale only) ───────── */}
+          <section class="admin-section type-section type-section-scale">
+            <h2>3. Schaal-instellingen <span class="form-hint">(voor NPS &amp; schaal)</span></h2>
+            <div class="form-grid">
+              <div class="form-field">
+                <label for="scale_min">Min waarde</label>
+                <input type="number" id="scale_min" name="scale_min" min={0} max={20}
+                  value={q?.scale_min != null ? String(q.scale_min) : ''} />
+              </div>
+              <div class="form-field">
+                <label for="scale_max">Max waarde</label>
+                <input type="number" id="scale_max" name="scale_max" min={1} max={20}
+                  value={q?.scale_max != null ? String(q.scale_max) : ''} />
+              </div>
+              <div class="form-field">
+                <label for="min_label_nl">Label minimum (NL)</label>
+                <input type="text" id="min_label_nl" name="min_label_nl"
+                  value={q?.min_label_nl ?? ''} placeholder="bv. Niet waarschijnlijk" />
+              </div>
+              <div class="form-field">
+                <label for="max_label_nl">Label maximum (NL)</label>
+                <input type="text" id="max_label_nl" name="max_label_nl"
+                  value={q?.max_label_nl ?? ''} placeholder="bv. Absoluut wel" />
+              </div>
+              <div class="form-field">
+                <label for="min_label_en">Label minimum (EN)</label>
+                <input type="text" id="min_label_en" name="min_label_en"
+                  value={q?.min_label_en ?? ''} placeholder="e.g. Not likely" />
+              </div>
+              <div class="form-field">
+                <label for="max_label_en">Label maximum (EN)</label>
+                <input type="text" id="max_label_en" name="max_label_en"
+                  value={q?.max_label_en ?? ''} placeholder="e.g. Extremely likely" />
+              </div>
+            </div>
+          </section>
+
+          {/* ───────── Choice options ───────── */}
+          <section class="admin-section type-section type-section-choice">
+            <h2>4. Keuze-opties <span class="form-hint">(voor type "Keuze")</span></h2>
+            <p class="form-helper">Eén optie per regel. Aantal regels NL en EN moet gelijk zijn.</p>
+            <div class="form-grid">
+              <div class="form-field full">
+                <label for="options_nl">Opties NL</label>
+                <textarea id="options_nl" name="options_nl" rows={6}
+                  placeholder="1&#10;2&#10;3&#10;4&#10;5&#10;alle 6">{(q?.options_nl ?? []).join('\n')}</textarea>
+              </div>
+              <div class="form-field full">
+                <label for="options_en">Opties EN</label>
+                <textarea id="options_en" name="options_en" rows={6}
+                  placeholder="1&#10;2&#10;3&#10;4&#10;5&#10;all 6">{(q?.options_en ?? []).join('\n')}</textarea>
+              </div>
+            </div>
+          </section>
+
+          {/* ───────── Conditional display ───────── */}
+          <section class="admin-section">
+            <h2>5. Voorwaardelijke weergave <span class="form-hint">(optioneel)</span></h2>
+            <p class="form-helper">
+              Toon deze vraag enkel als een andere vraag een specifiek antwoord kreeg. Laat beide leeg om altijd te tonen.
+            </p>
+            <div class="form-grid">
+              <div class="form-field">
+                <label for="cond_field">Veld (code van andere vraag)</label>
+                <input type="text" id="cond_field" name="cond_field"
+                  value={q?.conditional_on?.field ?? ''}
+                  placeholder="bv. q20_contact" />
+              </div>
+              <div class="form-field">
+                <label for="cond_value">Verwachte waarde</label>
+                <input type="text" id="cond_value" name="cond_value"
+                  value={q?.conditional_on?.value ?? ''}
+                  placeholder='bv. ja' />
+              </div>
+            </div>
+          </section>
+
+          {/* ───────── Submit ───────── */}
+          <section class="admin-section form-submit-row">
+            <a href="/admin/questions" class="btn btn-ghost">Annuleren</a>
+            <span class="spacer"></span>
+            <button type="submit" class="btn btn-teal" id="submitBtn">{submitLabel}</button>
+          </section>
+        </form>
+      </main>
+
+      <script src={v('/static/admin-questions.js')} defer></script>
+    </Layout>
+  )
+}
+
+// ============================================================
+// QUESTION IMPORT — paste a JSON blob, validate + insert/update
+// ============================================================
+
+export const QuestionsImportPage: FC<{ error?: string }> = ({ error }) => {
+  const sample = JSON.stringify({
+    questions: [
+      {
+        code: 'q21_voorbeeld',
+        type: 'scale',
+        category: 'organisatie',
+        required: false,
+        scale_min: 1,
+        scale_max: 5,
+        label_nl: 'Hoe tevreden ben je over de inschrijfprocedure?',
+        label_en: 'How satisfied are you with the registration process?',
+        helper_nl: null,
+        helper_en: null,
+        min_label_nl: 'Erg ontevreden',
+        min_label_en: 'Very dissatisfied',
+        max_label_nl: 'Heel tevreden',
+        max_label_en: 'Very satisfied',
+        options_nl: null,
+        options_en: null,
+        conditional_on: null,
+      },
+    ],
+  }, null, 2)
+
+  return (
+    <Layout title="Vragen importeren — admin" admin>
+      <header class="admin-header">
+        <a href="/admin/questions" class="btn btn-ghost" style="margin-right:auto;">← Vragenbibliotheek</a>
+        <h1 style="margin:0 0 0 16px;">⬆ Vragen importeren</h1>
+        <div class="spacer"></div>
+        <a href="/admin/logout" class="btn btn-ghost">Uitloggen</a>
+      </header>
+
+      <main class="admin-main new-survey-form">
+        {error ? (
+          <div class="form-error" role="alert">
+            <strong>Niet geïmporteerd:</strong> {error}
+          </div>
+        ) : null}
+
+        <section class="admin-section">
+          <h2>Plak JSON</h2>
+          <p class="form-hint">
+            Verwacht: ofwel een JSON-array <code>[{`{...}, {...}`}]</code>, ofwel een object met <code>questions</code>:
+            <code>{`{ "questions": [...] }`}</code>. Elk item moet de vereiste velden bevatten (zie voorbeeld onderaan).
+          </p>
+          <p class="form-hint">
+            <strong>Tip:</strong> exporteer eerst de huidige bibliotheek via <a href="/api/admin/questions/export">⬇ Exporteer</a>,
+            pas aan, en importeer terug.
+          </p>
+
+          <form method="POST" action="/admin/questions/import" id="importForm">
+            <div class="form-field full">
+              <label for="json">JSON-payload <span class="req">*</span></label>
+              <textarea id="json" name="json" rows={20} required spellcheck={false}
+                style="font-family:ui-monospace,SFMono-Regular,monospace;font-size:0.85rem;"
+                placeholder={sample}></textarea>
+            </div>
+
+            <div class="form-field" style="margin-top:14px;">
+              <label>Bij bestaande code:</label>
+              <label class="radio-inline">
+                <input type="radio" name="mode" value="skip" checked />
+                <span><strong>Overslaan</strong> — bestaande vragen blijven ongewijzigd (veiligste optie)</span>
+              </label>
+              <label class="radio-inline">
+                <input type="radio" name="mode" value="replace" />
+                <span><strong>Vervangen</strong> — overschrijf bestaande velden volledig</span>
+              </label>
+            </div>
+
+            <div class="form-submit-row" style="margin-top:24px;">
+              <a href="/admin/questions" class="btn btn-ghost">Annuleren</a>
+              <span class="spacer"></span>
+              <button type="button" id="loadSampleBtn" class="btn btn-ghost">📋 Plak voorbeeld</button>
+              <button type="submit" class="btn btn-teal" id="importSubmitBtn">⬆ Importeer</button>
+            </div>
+          </form>
+        </section>
+
+        <section class="admin-section">
+          <h2>Voorbeeld-payload</h2>
+          <pre style="background:#f5f7f9;padding:14px 18px;border-radius:8px;overflow-x:auto;font-size:0.82rem;line-height:1.5;">{sample}</pre>
+        </section>
+      </main>
+
+      <script src={v('/static/admin-questions.js')} defer></script>
     </Layout>
   )
 }

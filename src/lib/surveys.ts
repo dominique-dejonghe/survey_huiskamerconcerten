@@ -211,6 +211,185 @@ export async function getLibraryQuestion(db: D1Database, code: string): Promise<
   return r ? rowToQuestion(r) : null
 }
 
+// ============================================================
+// QUESTION LIBRARY CRUD — used by /admin/questions
+// ============================================================
+
+export type QuestionInput = {
+  code: string
+  type: 'nps' | 'scale' | 'choice' | 'text' | 'paragraph'
+  category?: string | null
+  required: boolean
+  scale_min?: number | null
+  scale_max?: number | null
+  label_nl: string
+  label_en: string
+  helper_nl?: string | null
+  helper_en?: string | null
+  min_label_nl?: string | null
+  min_label_en?: string | null
+  max_label_nl?: string | null
+  max_label_en?: string | null
+  options_nl?: string[] | null
+  options_en?: string[] | null
+  conditional_on?: { field: string; value: string } | null
+}
+
+/** Strict validation matching the type definition. Returns array of error strings. */
+export function validateQuestionInput(input: Partial<QuestionInput>): string[] {
+  const errs: string[] = []
+  const codeRe = /^[a-z][a-z0-9_]*$/
+  if (!input.code || !codeRe.test(input.code)) {
+    errs.push('Code is verplicht en moet beginnen met een kleine letter; alleen kleine letters, cijfers en underscores (bv. q1_nps).')
+  }
+  const allowedTypes = ['nps', 'scale', 'choice', 'text', 'paragraph']
+  if (!input.type || !allowedTypes.includes(input.type)) {
+    errs.push(`Type moet één van zijn: ${allowedTypes.join(', ')}.`)
+  }
+  if (!input.label_nl || !input.label_nl.trim()) errs.push('Label NL is verplicht.')
+  if (!input.label_en || !input.label_en.trim()) errs.push('Label EN is verplicht.')
+  if (input.type === 'nps') {
+    // NPS is conventioneel 0-10; auto-fill als de import ze weglaat.
+    if (input.scale_min == null) input.scale_min = 0
+    if (input.scale_max == null) input.scale_max = 10
+    if (input.scale_min >= input.scale_max) {
+      errs.push('scale_min moet kleiner zijn dan scale_max.')
+    }
+  } else if (input.type === 'scale') {
+    if (input.scale_min == null || input.scale_max == null) {
+      errs.push('Voor type scale zijn scale_min en scale_max verplicht.')
+    } else if (input.scale_min >= input.scale_max) {
+      errs.push('scale_min moet kleiner zijn dan scale_max.')
+    }
+  }
+  if (input.type === 'choice') {
+    const optsNl = input.options_nl || []
+    const optsEn = input.options_en || []
+    if (!Array.isArray(optsNl) || optsNl.length < 2) {
+      errs.push('Voor type choice zijn minstens 2 opties (NL) verplicht.')
+    }
+    if (Array.isArray(optsNl) && Array.isArray(optsEn) && optsNl.length !== optsEn.length) {
+      errs.push('Aantal opties NL en EN moet gelijk zijn.')
+    }
+  }
+  if (input.conditional_on) {
+    if (!input.conditional_on.field || !input.conditional_on.value) {
+      errs.push('Conditional_on moet zowel field als value bevatten.')
+    }
+  }
+  return errs
+}
+
+/** Insert a new question. Caller must validate first. */
+export async function createQuestion(
+  db: D1Database, input: QuestionInput,
+): Promise<void> {
+  await db.prepare(`
+    INSERT INTO questions (
+      code, type, category, required, scale_min, scale_max,
+      label_nl, label_en, helper_nl, helper_en,
+      min_label_nl, min_label_en, max_label_nl, max_label_en,
+      options_nl, options_en, conditional_on
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).bind(
+    input.code,
+    input.type,
+    input.category ?? null,
+    input.required ? 1 : 0,
+    input.scale_min ?? null,
+    input.scale_max ?? null,
+    input.label_nl,
+    input.label_en,
+    input.helper_nl ?? null,
+    input.helper_en ?? null,
+    input.min_label_nl ?? null,
+    input.min_label_en ?? null,
+    input.max_label_nl ?? null,
+    input.max_label_en ?? null,
+    input.options_nl ? JSON.stringify(input.options_nl) : null,
+    input.options_en ? JSON.stringify(input.options_en) : null,
+    input.conditional_on ? JSON.stringify(input.conditional_on) : null,
+  ).run()
+}
+
+/** Update an existing question (code is the immutable PK). */
+export async function updateQuestion(
+  db: D1Database, code: string, input: Omit<QuestionInput, 'code'>,
+): Promise<void> {
+  await db.prepare(`
+    UPDATE questions SET
+      type = ?, category = ?, required = ?,
+      scale_min = ?, scale_max = ?,
+      label_nl = ?, label_en = ?,
+      helper_nl = ?, helper_en = ?,
+      min_label_nl = ?, min_label_en = ?, max_label_nl = ?, max_label_en = ?,
+      options_nl = ?, options_en = ?, conditional_on = ?
+    WHERE code = ?
+  `).bind(
+    input.type,
+    input.category ?? null,
+    input.required ? 1 : 0,
+    input.scale_min ?? null,
+    input.scale_max ?? null,
+    input.label_nl,
+    input.label_en,
+    input.helper_nl ?? null,
+    input.helper_en ?? null,
+    input.min_label_nl ?? null,
+    input.min_label_en ?? null,
+    input.max_label_nl ?? null,
+    input.max_label_en ?? null,
+    input.options_nl ? JSON.stringify(input.options_nl) : null,
+    input.options_en ? JSON.stringify(input.options_en) : null,
+    input.conditional_on ? JSON.stringify(input.conditional_on) : null,
+    code,
+  ).run()
+}
+
+/** Returns array of survey ids that use the given question code. */
+export async function getSurveysUsingQuestion(
+  db: D1Database, code: string,
+): Promise<Array<{ id: number; title_nl: string; status: string }>> {
+  // SQLite has json_each — but to stay portable we filter in JS after a coarse LIKE.
+  const r = await db.prepare(
+    `SELECT id, title_nl, status, question_codes FROM surveys WHERE question_codes LIKE ?`,
+  ).bind(`%"${code}"%`).all<{ id: number; title_nl: string; status: string; question_codes: string }>()
+  const out: Array<{ id: number; title_nl: string; status: string }> = []
+  for (const row of r.results ?? []) {
+    try {
+      const arr = JSON.parse(row.question_codes)
+      if (Array.isArray(arr) && arr.includes(code)) {
+        out.push({ id: row.id, title_nl: row.title_nl, status: row.status })
+      }
+    } catch { /* skip */ }
+  }
+  return out
+}
+
+/** Delete a question. Caller is responsible for checking it's not in use. */
+export async function deleteQuestion(db: D1Database, code: string): Promise<void> {
+  await db.prepare('DELETE FROM questions WHERE code = ?').bind(code).run()
+}
+
+/** Bulk import: validate all rows, then upsert (replace existing by code). */
+export async function importQuestions(
+  db: D1Database, rows: QuestionInput[], mode: 'replace' | 'skip',
+): Promise<{ inserted: number; updated: number; skipped: number }> {
+  let inserted = 0, updated = 0, skipped = 0
+  for (const row of rows) {
+    const existing = await db.prepare('SELECT 1 FROM questions WHERE code = ?').bind(row.code).first()
+    if (existing) {
+      if (mode === 'skip') { skipped++; continue }
+      await updateQuestion(db, row.code, row)
+      updated++
+    } else {
+      await createQuestion(db, row)
+      inserted++
+    }
+  }
+  return { inserted, updated, skipped }
+}
+
 export async function getQuestionsForSurvey(db: D1Database, survey: Survey): Promise<LibraryQuestion[]> {
   if (survey.question_codes.length === 0) return []
   // SQLite IN (?, ?, ...) — keep order via in-memory sort

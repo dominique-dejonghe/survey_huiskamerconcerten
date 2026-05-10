@@ -33,6 +33,11 @@ Brand kleuren worden via CSS custom properties (`--brand-primary`, `--brand-acce
 | **Nieuwe enquête aanmaken** | https://huiskamerconcerten-survey.pages.dev/admin/surveys/new |
 | **Per-survey dashboard** | https://huiskamerconcerten-survey.pages.dev/admin/surveys/1 |
 | **Enquête bewerken** | https://huiskamerconcerten-survey.pages.dev/admin/surveys/1/edit |
+| **Vragenbibliotheek (CRUD)** | https://huiskamerconcerten-survey.pages.dev/admin/questions |
+| **Nieuwe vraag aanmaken** | https://huiskamerconcerten-survey.pages.dev/admin/questions/new |
+| **Vraag bewerken** | https://huiskamerconcerten-survey.pages.dev/admin/questions/q1_nps/edit |
+| **Vragen importeren (JSON)** | https://huiskamerconcerten-survey.pages.dev/admin/questions/import |
+| **Vragen exporteren (JSON)** | https://huiskamerconcerten-survey.pages.dev/api/admin/questions/export |
 | **Bedankpagina (NL)** | https://huiskamerconcerten-survey.pages.dev/h/<slug>/dank-je |
 | **Privacy (NL)** | https://huiskamerconcerten-survey.pages.dev/privacy |
 | **Health check** | https://huiskamerconcerten-survey.pages.dev/api/health |
@@ -162,10 +167,10 @@ npx wrangler d1 execute huiskamerconcerten-prod --remote --command="INSERT INTO 
 ✅ **Admin form: bestaande enquête bewerken** — `/admin/surveys/:id/edit` past titel, ondertitel, vragen, status, slug, datums aan; brand staat vast (zou bestaande URLs/responses breken). Slug-wijziging werkt maar oude links stoppen.
 ✅ **Deel-knop op dashboard** — modal met directe URL (kopieer-naar-klembord), WhatsApp-link (`wa.me/?text=...`), e-mail (`mailto:...`), én een QR-code (via api.qrserver.com) voor flyers/schermen
 ✅ **Success flash banner** — groene "✓ Wijzigingen opgeslagen" / "Enquête aangemaakt" notice bij redirect
+✅ **Vragenbibliotheek CRUD** — `/admin/questions` toont alle vragen gegroepeerd per categorie met live filter, type-pills, en gebruiks-info per vraag. Knoppen voor **+ Nieuwe vraag**, **Bewerken**, **Verwijderen** (met usage-guard: een vraag die nog in een enquête zit kan niet verwijderd worden — meldt welke surveys hem gebruiken). Edit-form heeft type-aware secties (NPS/scale toont schaal-instellingen, choice toont opties-editor, tekst/paragraaf verbergt beide). De `code` is read-only na aanmaken (PRIMARY KEY immutability). Voorwaardelijke weergave (`conditional_on`) editbaar via JSON-textarea.
+✅ **JSON import/export van vragen** — `/admin/questions/import` accepteert array of `{questions: [...]}` JSON met **skip** (bestaande vragen behouden) of **replace** (overschrijven) modus; rapporteert inserted/updated/skipped counts. NPS auto-fillt scale_min=0/scale_max=10 als niet gespecificeerd. Export via `GET /api/admin/questions/export` als JSON-bestand met datum in filename. **Geïmporteerde vragen zijn meteen volledig editbaar via de gewone edit-flow.**
 
 ## Features Not Yet Implemented
-
-⏳ **Question editor in admin** — vragen toevoegen/wijzigen via UI (nu enkel via migration)
 ⏳ **Survey duplicate** — kopieer een survey als basis voor een nieuwe
 ⏳ **Survey delete** vanuit admin (nu enkel status → archived)
 ⏳ **Bulk e-mail uitnodigingen** vanuit admin (Share-knop biedt nu enkel 1-per-1 link)
