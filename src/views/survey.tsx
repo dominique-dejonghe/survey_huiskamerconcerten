@@ -2,23 +2,43 @@ import type { FC } from 'hono/jsx'
 import { Layout } from './layout'
 import { QUESTIONS, type Question } from '../lib/questions'
 import { UI, SECTIONS_I18N, QUESTIONS_I18N, type Lang } from '../lib/i18n'
+import type { Brand, Survey } from '../lib/surveys'
 
-const SiteHeader: FC<{ lang: Lang }> = ({ lang }) => {
+const SiteHeader: FC<{ lang: Lang; brand?: Brand | null; survey?: Survey | null }> = ({ lang, brand, survey }) => {
   const t = UI[lang]
+  // Build the language-switch URL that stays inside the same survey
+  let langOtherHref = t.langOtherHref
+  if (brand && survey) {
+    langOtherHref = lang === 'en'
+      ? `/${brand.url_prefix}/${survey.slug}`
+      : `/${brand.url_prefix}/${survey.slug}/en`
+  }
+  const homeHref = brand?.website_url ?? 'https://www.josvanimmerseel.com/huisconcerten'
+  const showJosLinks = !brand || brand.id === 'huiskamer'
   return (
     <header class="site-header">
       <div class="site-header-inner">
-        <a href="https://www.josvanimmerseel.com/huisconcerten" class="btn-home" aria-label={t.home}>
-          <span aria-hidden="true">⌂</span> {t.home}
-        </a>
+        {brand?.logo_url ? (
+          <a href={homeHref} class="site-logo-link" aria-label={t.home}>
+            <img src={brand.logo_url} alt={lang === 'en' ? brand.name_en : brand.name_nl} class="site-logo" />
+          </a>
+        ) : (
+          <a href={homeHref} class="btn-home" aria-label={t.home}>
+            <span aria-hidden="true">⌂</span> {t.home}
+          </a>
+        )}
         <button class="nav-toggle" id="navToggle" aria-label={t.menuLabel} aria-expanded="false">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
         </button>
         <nav class="site-nav" id="siteNav">
-          <a href="https://www.josvanimmerseel.com/huisconcerten">{t.navTickets}</a>
-          <a href="https://www.josvanimmerseel.com/bio_jos">{t.navJos}</a>
-          <a href="https://www.ayako-ito-fortepiano.com/">{t.navAyako}</a>
-          <a href={t.langOtherHref} class="lang-switch" aria-label={t.langSwitchAria} title={t.langOtherFull}>
+          <a href={homeHref}>{t.navTickets}</a>
+          {showJosLinks ? (
+            <>
+              <a href="https://www.josvanimmerseel.com/bio_jos">{t.navJos}</a>
+              <a href="https://www.ayako-ito-fortepiano.com/">{t.navAyako}</a>
+            </>
+          ) : null}
+          <a href={langOtherHref} class="lang-switch" aria-label={t.langSwitchAria} title={t.langOtherFull}>
             <span aria-hidden="true">🌐</span> {t.langOther}
           </a>
         </nav>
@@ -27,18 +47,23 @@ const SiteHeader: FC<{ lang: Lang }> = ({ lang }) => {
   )
 }
 
-const Hero: FC<{ lang: Lang }> = ({ lang }) => {
+const Hero: FC<{ lang: Lang; brand?: Brand | null; survey?: Survey | null }> = ({ lang, brand, survey }) => {
   const t = UI[lang]
+  const title = survey ? (lang === 'en' ? survey.title_en : survey.title_nl) : t.heroTitle
+  const subtitle = survey
+    ? ((lang === 'en' ? survey.subtitle_en : survey.subtitle_nl) ?? t.heroSub)
+    : t.heroSub
+  const badge = survey?.series_name ?? t.badge
   return (
     <section class="hero">
-      <span class="badge badge-red italic-serif">{t.badge}</span>
-      <h1>{t.heroTitle}</h1>
-      <p class="subtitle">{t.heroSub}</p>
+      <span class="badge badge-red italic-serif">{badge}</span>
+      <h1>{title}</h1>
+      <p class="subtitle">{subtitle}</p>
     </section>
   )
 }
 
-const ProgressBar: FC<{ lang: Lang }> = ({ lang }) => {
+const ProgressBar: FC<{ lang: Lang; total?: number }> = ({ lang, total = 20 }) => {
   const t = UI[lang]
   return (
     <div class="progress-wrapper" role="region" aria-label={t.progressRegion}>
@@ -46,16 +71,25 @@ const ProgressBar: FC<{ lang: Lang }> = ({ lang }) => {
         <div class="progress-track" aria-hidden="true">
           <div class="progress-fill" id="progressFill"></div>
         </div>
-        <div class="progress-label" id="progressLabel" data-total="20" data-i18n-progress={lang}>
-          {t.progressLabel(0, 20)}
+        <div class="progress-label" id="progressLabel" data-total={String(total)} data-i18n-progress={lang}>
+          {t.progressLabel(0, total)}
         </div>
       </div>
     </div>
   )
 }
 
-const IntroCard: FC<{ lang: Lang }> = ({ lang }) => {
+const IntroCard: FC<{ lang: Lang; brand?: Brand | null; survey?: Survey | null }> = ({ lang, brand, survey }) => {
   const t = UI[lang]
+  // Survey-specific intro takes priority
+  const customIntro = survey ? (lang === 'en' ? survey.intro_en : survey.intro_nl) : null
+  if (customIntro) {
+    return (
+      <div class="intro-card">
+        {customIntro.split(/\n\n+/).map(p => <p>{p}</p>)}
+      </div>
+    )
+  }
   return (
     <div class="intro-card">
       <p>
@@ -165,44 +199,66 @@ const SectionDivider: FC<{ id: string; lang: Lang }> = ({ id, lang }) => {
   )
 }
 
-export const SurveyPage: FC<{ lang?: Lang }> = ({ lang = 'nl' }) => {
+export const SurveyPage: FC<{ lang?: Lang; brand?: Brand | null; survey?: Survey | null }> = ({ lang = 'nl', brand, survey }) => {
   const t = UI[lang]
+  // Filter questions to those listed in the survey config (default: all)
+  const wanted = survey?.question_codes ?? null
+  const filtered = wanted
+    ? QUESTIONS.filter(q => wanted.includes(q.id))
+    : QUESTIONS
   const grouped: Record<string, Question[]> = {}
-  for (const q of QUESTIONS) {
+  for (const q of filtered) {
     if (!grouped[q.section]) grouped[q.section] = []
     grouped[q.section].push(q)
   }
   const sections = SECTIONS_I18N[lang]
-  // i18n payload for client-side script
+  const totalQuestions = filtered.length
+  // Thanks URL stays within the survey context
+  const thanksUrl = brand && survey
+    ? `/${brand.url_prefix}/${survey.slug}/${lang === 'en' ? 'thank-you' : 'dank-je'}`
+    : (lang === 'en' ? '/thank-you' : '/dank-je')
   const clientI18n = {
     lang,
-    progressTpl: t.progressLabel(0, 20).replace('0', '__N__').replace('20', '__T__'),
+    progressTpl: t.progressLabel(0, totalQuestions).replace('0', '__N__').replace(String(totalQuestions), '__T__'),
     submitting: t.submitSending,
     submit: t.submitBtn,
     rateLimit: t.errRateLimit,
     something: t.errSomething,
     network: t.errNetwork,
     unknown: t.errUnknown,
-    thanksUrl: lang === 'en' ? '/thank-you' : '/dank-je',
+    thanksUrl,
+    surveyId: survey?.id ?? 1,
+    brandPrefix: brand?.url_prefix ?? 'h',
+    surveySlug: survey?.slug ?? 'reeks-1-immerseel-ito',
   }
+  const titleString = survey
+    ? (lang === 'en' ? `${survey.title_en} — survey` : `${survey.title_nl} — enquête`)
+    : t.surveyTitle
   return (
-    <Layout title={t.surveyTitle} lang={lang}>
-      <SiteHeader lang={lang} />
-      <Hero lang={lang} />
-      <ProgressBar lang={lang} />
+    <Layout title={titleString} lang={lang} brand={brand}>
+      <SiteHeader lang={lang} brand={brand} survey={survey} />
+      <Hero lang={lang} brand={brand} survey={survey} />
+      <ProgressBar lang={lang} total={totalQuestions} />
       <main class="container">
-        <IntroCard lang={lang} />
+        <IntroCard lang={lang} brand={brand} survey={survey} />
         <form id="surveyForm" novalidate autocomplete="off">
           {/* Honeypot */}
           <input type="text" name="website" id="website" class="honeypot" tabindex={-1} autocomplete="off" aria-hidden="true" />
           <input type="hidden" name="lang" id="lang" value={lang} />
+          <input type="hidden" name="survey_id" id="survey_id" value={String(survey?.id ?? 1)} />
+          <input type="hidden" name="brand_prefix" id="brand_prefix" value={brand?.url_prefix ?? 'h'} />
+          <input type="hidden" name="survey_slug" id="survey_slug" value={survey?.slug ?? ''} />
 
-          {sections.map(section => (
-            <>
-              <SectionDivider id={section.id} lang={lang} />
-              {(grouped[section.id] || []).map(q => <QuestionView q={q} lang={lang} />)}
-            </>
-          ))}
+          {sections.map(section => {
+            const list = grouped[section.id] || []
+            if (list.length === 0) return null
+            return (
+              <>
+                <SectionDivider id={section.id} lang={lang} />
+                {list.map(q => <QuestionView q={q} lang={lang} />)}
+              </>
+            )
+          })}
 
           <div class="submit-row">
             <button type="submit" class="btn-submit" id="submitBtn">
@@ -220,7 +276,6 @@ export const SurveyPage: FC<{ lang?: Lang }> = ({ lang = 'nl' }) => {
         </p>
       </footer>
       <script
-        // i18n config for survey.js (read via window.SURVEY_I18N)
         dangerouslySetInnerHTML={{ __html: `window.SURVEY_I18N=${JSON.stringify(clientI18n)};` }}
       />
       <script src="/static/survey.js" defer></script>
@@ -228,15 +283,19 @@ export const SurveyPage: FC<{ lang?: Lang }> = ({ lang = 'nl' }) => {
   )
 }
 
-export const ThanksPage: FC<{ lang?: Lang }> = ({ lang = 'nl' }) => {
+export const ThanksPage: FC<{ lang?: Lang; brand?: Brand | null; survey?: Survey | null }> = ({ lang = 'nl', brand, survey }) => {
   const t = UI[lang]
+  const customThanks = survey ? (lang === 'en' ? survey.thanks_en : survey.thanks_nl) : null
   return (
-    <Layout title={t.thanksTitle} lang={lang}>
-      <SiteHeader lang={lang} />
+    <Layout title={t.thanksTitle} lang={lang} brand={brand}>
+      <SiteHeader lang={lang} brand={brand} survey={survey} />
       <main class="thanks">
         <div class="ornament" aria-hidden="true">❦</div>
         <h1>{t.thanksHeadline}</h1>
-        <p>{t.thanksBody}</p>
+        {customThanks
+          ? customThanks.split(/\n\n+/).map(p => <p>{p}</p>)
+          : <p>{t.thanksBody}</p>
+        }
         <p class="signature">{t.thanksSig}</p>
       </main>
       <footer class="site-footer">

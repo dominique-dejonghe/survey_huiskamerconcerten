@@ -201,6 +201,14 @@
           : null
       };
 
+      // Multi-survey: include survey identification when present
+      var sId = document.getElementById('survey_id');
+      var bp = document.getElementById('brand_prefix');
+      var ss = document.getElementById('survey_slug');
+      if (sId && sId.value) payload.survey_id = parseInt(sId.value, 10);
+      if (bp && bp.value) payload.brand_prefix = bp.value;
+      if (ss && ss.value) payload.survey_slug = ss.value;
+
       submitBtn.disabled = true;
       submitBtn.querySelector('span').textContent = I18N.submitting;
 

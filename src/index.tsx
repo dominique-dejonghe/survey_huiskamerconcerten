@@ -3,7 +3,8 @@ import { cors } from 'hono/cors'
 import { logger } from 'hono/logger'
 
 import { SurveyPage, ThanksPage, PrivacyPage } from './views/survey'
-import { LoginPage, DashboardPage } from './views/admin'
+import { LandingPage } from './views/landing'
+import { LoginPage, DashboardPage, AdminOverviewPage } from './views/admin'
 import { responseSchema } from './lib/validation'
 import { hashIp } from './lib/crypto'
 import {
@@ -21,8 +22,11 @@ import {
 import { sendNewResponseNotification } from './lib/email'
 import {
   generateAnalysis, getCachedAnalysis, saveCachedAnalysis, clearCachedAnalysis,
-  type AnalysisResult,
 } from './lib/ai'
+import {
+  listBrands, listSurveys, listSurveysWithStats,
+  getBrandByPrefix, getSurveyBySlug, getSurveyById,
+} from './lib/surveys'
 import type { Lang } from './lib/i18n'
 
 const app = new Hono<{ Bindings: Bindings }>()
@@ -34,7 +38,6 @@ app.use('*', async (c, next) => {
   const path = c.req.path
   const isAdmin = path.startsWith('/admin') || path.startsWith('/api/admin')
   const csp = isAdmin
-    // Admin: allow html2pdf bundle from cdnjs + inline styles/scripts/data-URIs needed by html2canvas
     ? [
         "default-src 'self'",
         "script-src 'self' 'unsafe-inline' https://cdnjs.cloudflare.com",
@@ -70,18 +73,74 @@ function getClientIp(c: any): string {
     || '0.0.0.0'
 }
 
-// ============ PUBLIC ROUTES (NL = default) ============
-app.get('/', (c) => c.html(<SurveyPage lang="nl" />))
+async function adminSurveyId(c: any): Promise<number> {
+  const raw = c.req.query('survey')
+  const id = raw ? parseInt(raw, 10) : NaN
+  if (Number.isFinite(id) && id > 0) {
+    const s = await getSurveyById(c.env.DB, id)
+    if (s) return s.id
+  }
+  return 1 // backwards-compatible default
+}
+
+// ============================================================
+// LANDING + LEGACY REDIRECTS
+// ============================================================
+app.get('/', async (c) => {
+  const surveys = await listSurveysWithStats(c.env.DB, { status: 'open' })
+  const brands = await listBrands(c.env.DB)
+  return c.html(<LandingPage lang="nl" surveys={surveys} brands={brands} />)
+})
+app.get('/en', async (c) => {
+  const surveys = await listSurveysWithStats(c.env.DB, { status: 'open' })
+  const brands = await listBrands(c.env.DB)
+  return c.html(<LandingPage lang="en" surveys={surveys} brands={brands} />)
+})
+
+// Legacy redirects: keep old links to Reeks I working
 app.get('/dank-je', (c) => c.html(<ThanksPage lang="nl" />))
 app.get('/privacy', (c) => c.html(<PrivacyPage lang="nl" />))
-// ============ PUBLIC ROUTES (EN) ============
-app.get('/en', (c) => c.html(<SurveyPage lang="en" />))
-app.get('/en/', (c) => c.redirect('/en'))
 app.get('/thank-you', (c) => c.html(<ThanksPage lang="en" />))
 app.get('/en/privacy', (c) => c.html(<PrivacyPage lang="en" />))
 app.get('/health', (c) => c.json({ ok: true, ts: new Date().toISOString() }))
 
-// ============ API: SUBMIT RESPONSE ============
+// ============================================================
+// PUBLIC SURVEY ROUTES — /h/:slug and /e/:slug (NL + EN)
+// ============================================================
+async function renderSurveyForSlug(c: any, prefix: string, slug: string, lang: Lang) {
+  const brand = await getBrandByPrefix(c.env.DB, prefix)
+  if (!brand) return c.notFound()
+  const survey = await getSurveyBySlug(c.env.DB, prefix, slug)
+  if (!survey) return c.notFound()
+  if (survey.status !== 'open') {
+    // Could render a "closed" page; for now redirect to landing
+    return c.redirect(lang === 'en' ? '/en' : '/')
+  }
+  return c.html(<SurveyPage lang={lang} brand={brand} survey={survey} />)
+}
+
+app.get('/:prefix{[he]}/:slug', async (c) => {
+  return renderSurveyForSlug(c, c.req.param('prefix'), c.req.param('slug'), 'nl')
+})
+app.get('/:prefix{[he]}/:slug/en', async (c) => {
+  return renderSurveyForSlug(c, c.req.param('prefix'), c.req.param('slug'), 'en')
+})
+app.get('/:prefix{[he]}/:slug/dank-je', async (c) => {
+  const brand = await getBrandByPrefix(c.env.DB, c.req.param('prefix'))
+  const survey = await getSurveyBySlug(c.env.DB, c.req.param('prefix'), c.req.param('slug'))
+  if (!brand || !survey) return c.notFound()
+  return c.html(<ThanksPage lang="nl" brand={brand} survey={survey} />)
+})
+app.get('/:prefix{[he]}/:slug/thank-you', async (c) => {
+  const brand = await getBrandByPrefix(c.env.DB, c.req.param('prefix'))
+  const survey = await getSurveyBySlug(c.env.DB, c.req.param('prefix'), c.req.param('slug'))
+  if (!brand || !survey) return c.notFound()
+  return c.html(<ThanksPage lang="en" brand={brand} survey={survey} />)
+})
+
+// ============================================================
+// API: SUBMIT RESPONSE
+// ============================================================
 app.post('/api/responses', async (c) => {
   let body: unknown
   try { body = await c.req.json() } catch { return c.json({ error: 'invalid_json' }, 400) }
@@ -94,29 +153,40 @@ app.post('/api/responses', async (c) => {
     }, 400)
   }
 
-  // Honeypot check
-  const data = parsed.data
+  const data = parsed.data as any
   if ((data.website ?? '').trim().length > 0) {
     return c.json({ error: 'spam_detected' }, 400)
   }
+
+  // Resolve survey by id (preferred) or by slug (fallback). Default to 1 for backwards compat.
+  let surveyId = 1
+  if (typeof data.survey_id === 'number' && data.survey_id > 0) {
+    const s = await getSurveyById(c.env.DB, data.survey_id)
+    if (s) surveyId = s.id
+  } else if (typeof data.brand_prefix === 'string' && typeof data.survey_slug === 'string') {
+    const s = await getSurveyBySlug(c.env.DB, data.brand_prefix, data.survey_slug)
+    if (s) surveyId = s.id
+  }
+
+  // Verify survey is open
+  const survey = await getSurveyById(c.env.DB, surveyId)
+  if (!survey) return c.json({ error: 'unknown_survey' }, 400)
+  if (survey.status !== 'open') return c.json({ error: 'survey_closed' }, 403)
 
   const ip = getClientIp(c)
   const salt = c.env.IP_HASH_SALT || 'dev-salt-change-me'
   const ipHash = await hashIp(ip, salt)
   const userAgent = c.req.header('user-agent') ?? ''
 
-  // Rate limit: 3 per uur per IP-hash
   const rl = await checkRateLimit(c.env.DB, ipHash, 3)
   if (!rl.ok) {
-    await logAudit(c.env.DB, 'rate_limited', ipHash, { current: rl.current })
+    await logAudit(c.env.DB, 'rate_limited', ipHash, { current: rl.current, surveyId })
     return c.json({ error: 'rate_limited', message: 'Maximum 3 inzendingen per uur.' }, 429)
   }
 
-  // Insert
-  const id = await insertResponse(c.env.DB, data, { ipHash, userAgent })
-  await logAudit(c.env.DB, 'response_submitted', ipHash, { id, nps: data.q1_nps })
+  const id = await insertResponse(c.env.DB, parsed.data, { ipHash, userAgent, surveyId })
+  await logAudit(c.env.DB, 'response_submitted', ipHash, { id, nps: data.q1_nps, surveyId })
 
-  // E-mail (optioneel — gestuurd alleen als EMAIL_ENABLED=true)
   const url = new URL(c.req.url)
   const siteUrl = `${url.protocol}//${url.host}`
   c.executionCtx.waitUntil(
@@ -126,15 +196,16 @@ app.post('/api/responses', async (c) => {
       aantal: data.q3_aantal,
       wensen: data.q15_wensen_2 ?? '',
       siteUrl,
-    }).then((res) => logAudit(c.env.DB, 'email_attempt', ipHash, { id, ...res }))
+    }).then((res) => logAudit(c.env.DB, 'email_attempt', ipHash, { id, surveyId, ...res }))
   )
 
-  return c.json({ ok: true, id }, 201)
+  return c.json({ ok: true, id, surveyId }, 201)
 })
 
-// ============ ADMIN: LOGIN ============
+// ============================================================
+// ADMIN: LOGIN / LOGOUT
+// ============================================================
 app.get('/admin/login', async (c) => {
-  // Already logged in? → dashboard
   const s = await getAdminSession(c)
   if (s) return c.redirect('/admin')
   const err = c.req.query('error')
@@ -163,43 +234,71 @@ app.get('/admin/logout', async (c) => {
   return c.redirect('/admin/login')
 })
 
-// ============ ADMIN: DASHBOARD ============
+// ============================================================
+// ADMIN: OVERVIEW (all surveys) + per-survey dashboard
+// ============================================================
 app.get('/admin', async (c) => {
   const guard = await requireAdmin(c)
   if (guard) return guard
-  return c.html(<DashboardPage />)
+  const surveys = await listSurveysWithStats(c.env.DB, { status: 'all' })
+  const brands = await listBrands(c.env.DB)
+  return c.html(<AdminOverviewPage surveys={surveys} brands={brands} />)
 })
 
-// ============ API: ADMIN ============
+app.get('/admin/surveys/:id', async (c) => {
+  const guard = await requireAdmin(c)
+  if (guard) return guard
+  const id = parseInt(c.req.param('id'), 10)
+  const survey = await getSurveyById(c.env.DB, id)
+  if (!survey) return c.notFound()
+  return c.html(<DashboardPage survey={survey} />)
+})
+
+// ============================================================
+// API: ADMIN
+// ============================================================
+app.get('/api/admin/surveys', async (c) => {
+  const guard = await requireAdmin(c)
+  if (guard) return guard
+  const surveys = await listSurveysWithStats(c.env.DB, { status: 'all' })
+  c.header('Cache-Control', 'private, max-age=15')
+  return c.json({ surveys })
+})
+
 app.get('/api/admin/responses', async (c) => {
   const guard = await requireAdmin(c)
   if (guard) return guard
-  const rows = await listResponses(c.env.DB)
+  const surveyId = await adminSurveyId(c)
+  const rows = await listResponses(c.env.DB, surveyId)
   const stats = computeStats(rows)
   c.header('Cache-Control', 'private, max-age=30')
-  return c.json({ responses: rows, stats })
+  return c.json({ responses: rows, stats, surveyId })
 })
 
 app.get('/api/admin/export', async (c) => {
   const guard = await requireAdmin(c)
   if (guard) return guard
+  const surveyId = await adminSurveyId(c)
+  const survey = await getSurveyById(c.env.DB, surveyId)
   const fmtRaw = c.req.query('format')
   const format: 'csv' | 'json' | 'docx' =
     fmtRaw === 'json' ? 'json' : fmtRaw === 'docx' ? 'docx' : 'csv'
-  const rows = await listResponses(c.env.DB)
+  const rows = await listResponses(c.env.DB, surveyId)
 
   const ip = getClientIp(c)
   const ipHash = await hashIp(ip, c.env.IP_HASH_SALT || 'dev')
-  await logAudit(c.env.DB, `export_${format}`, ipHash, { count: rows.length })
+  await logAudit(c.env.DB, `export_${format}`, ipHash, { count: rows.length, surveyId })
 
   const today = new Date().toISOString().slice(0, 10)
+  const slug = survey?.slug ?? 'survey'
+  const fileBase = `${slug}-${today}`
 
   if (format === 'csv') {
     const csv = rowsToCsv(rows)
     return new Response(csv, {
       headers: {
         'Content-Type': 'text/csv; charset=utf-8',
-        'Content-Disposition': `attachment; filename="huiskamerconcerten-survey-${today}.csv"`,
+        'Content-Disposition': `attachment; filename="${fileBase}.csv"`,
       },
     })
   }
@@ -209,22 +308,18 @@ app.get('/api/admin/export', async (c) => {
     return new Response(json, {
       headers: {
         'Content-Type': 'application/json; charset=utf-8',
-        'Content-Disposition': `attachment; filename="huiskamerconcerten-survey-${today}.json"`,
+        'Content-Disposition': `attachment; filename="${fileBase}.json"`,
       },
     })
   }
 
-  // ===== DOCX report (Word document with KPIs, charts, AI analysis) =====
   const lang: Lang = c.req.query('lang') === 'en' ? 'en' : 'nl'
-  const analysis = await getCachedAnalysis(c.env.DB, lang)
-  const buffer = await buildSurveyDocx(rows, analysis, lang)
-  const nameBase = lang === 'en'
-    ? `house-concerts-report-${today}`
-    : `huiskamerconcerten-rapport-${today}`
+  const analysis = await getCachedAnalysis(c.env.DB, lang, surveyId)
+  const buffer = await buildSurveyDocx(rows, analysis, lang, survey ?? undefined)
   return new Response(buffer, {
     headers: {
       'Content-Type': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-      'Content-Disposition': `attachment; filename="${nameBase}.docx"`,
+      'Content-Disposition': `attachment; filename="${fileBase}.docx"`,
       'Content-Length': String(buffer.byteLength),
       'Cache-Control': 'no-store',
     },
@@ -242,14 +337,26 @@ app.delete('/api/admin/responses/:id', async (c) => {
   return c.json({ ok: true })
 })
 
-// ============ API: AI ANALYSIS ============
-// GET  → returns cached analysis (or 404 if none)
-// POST → forces a fresh generation (and caches it)
+app.delete('/api/admin/responses', async (c) => {
+  const guard = await requireAdmin(c)
+  if (guard) return guard
+  const surveyId = await adminSurveyId(c)
+  const deleted = await deleteAllResponses(c.env.DB, surveyId)
+  const ip = getClientIp(c)
+  const ipHash = await hashIp(ip, c.env.IP_HASH_SALT || 'dev')
+  await logAudit(c.env.DB, 'delete_all', ipHash, { deleted, surveyId })
+  return c.json({ ok: true, deleted })
+})
+
+// ============================================================
+// API: AI ANALYSIS (per survey)
+// ============================================================
 app.get('/api/admin/analyze', async (c) => {
   const guard = await requireAdmin(c)
   if (guard) return guard
+  const surveyId = await adminSurveyId(c)
   const lang: Lang = c.req.query('lang') === 'en' ? 'en' : 'nl'
-  const cached = await getCachedAnalysis(c.env.DB, lang)
+  const cached = await getCachedAnalysis(c.env.DB, lang, surveyId)
   if (!cached) return c.json({ cached: false, analysis: null }, 200)
   return c.json({ cached: true, analysis: cached })
 })
@@ -257,15 +364,16 @@ app.get('/api/admin/analyze', async (c) => {
 app.post('/api/admin/analyze', async (c) => {
   const guard = await requireAdmin(c)
   if (guard) return guard
+  const surveyId = await adminSurveyId(c)
   const lang: Lang = c.req.query('lang') === 'en' ? 'en' : 'nl'
   const force = c.req.query('force') === '1'
 
   if (!force) {
-    const cached = await getCachedAnalysis(c.env.DB, lang)
+    const cached = await getCachedAnalysis(c.env.DB, lang, surveyId)
     if (cached) return c.json({ cached: true, analysis: cached })
   }
 
-  const rows = await listResponses(c.env.DB)
+  const rows = await listResponses(c.env.DB, surveyId)
   if (rows.length === 0) {
     return c.json({ error: 'no_data', message: 'Geen responses om te analyseren.' }, 400)
   }
@@ -283,12 +391,12 @@ app.post('/api/admin/analyze', async (c) => {
       rows,
       lang,
     )
-    await saveCachedAnalysis(c.env.DB, lang, result)
-    await logAudit(c.env.DB, 'ai_analyze', ipHash, { lang, count: rows.length, provider: result.provider })
+    await saveCachedAnalysis(c.env.DB, lang, result, surveyId)
+    await logAudit(c.env.DB, 'ai_analyze', ipHash, { lang, count: rows.length, provider: result.provider, surveyId })
     return c.json({ cached: false, analysis: result })
   } catch (e: any) {
     console.error('AI analyze error:', e)
-    await logAudit(c.env.DB, 'ai_analyze_fail', ipHash, { lang, error: String(e?.message ?? e).slice(0, 300) })
+    await logAudit(c.env.DB, 'ai_analyze_fail', ipHash, { lang, error: String(e?.message ?? e).slice(0, 300), surveyId })
     return c.json({ error: 'ai_failed', message: e?.message ?? 'AI-analyse mislukt' }, 500)
   }
 })
@@ -296,22 +404,15 @@ app.post('/api/admin/analyze', async (c) => {
 app.delete('/api/admin/analyze', async (c) => {
   const guard = await requireAdmin(c)
   if (guard) return guard
+  const surveyId = await adminSurveyId(c)
   const lang = c.req.query('lang') as Lang | undefined
-  await clearCachedAnalysis(c.env.DB, lang === 'nl' || lang === 'en' ? lang : undefined)
+  await clearCachedAnalysis(c.env.DB, lang === 'nl' || lang === 'en' ? lang : undefined, surveyId)
   return c.json({ ok: true })
 })
 
-app.delete('/api/admin/responses', async (c) => {
-  const guard = await requireAdmin(c)
-  if (guard) return guard
-  const deleted = await deleteAllResponses(c.env.DB)
-  const ip = getClientIp(c)
-  const ipHash = await hashIp(ip, c.env.IP_HASH_SALT || 'dev')
-  await logAudit(c.env.DB, 'delete_all', ipHash, { deleted })
-  return c.json({ ok: true, deleted })
-})
-
-// ============ 404 ============
+// ============================================================
+// 404 / error
+// ============================================================
 app.notFound((c) => c.json({ error: 'not_found' }, 404))
 
 app.onError((err, c) => {

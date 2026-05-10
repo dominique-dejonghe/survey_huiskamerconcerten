@@ -23,6 +23,7 @@ import {
 } from 'docx'
 import type { ResponseRow } from './db'
 import type { AnalysisResult } from './ai'
+import type { Survey } from './surveys'
 
 type Lang = 'nl' | 'en'
 
@@ -294,29 +295,39 @@ function bar(value: number, max: number, width = 30): string {
 
 // ===== Section builders =====
 
-function buildCover(rows: ResponseRow[], lang: Lang, t: ReturnType<typeof L>): Paragraph[] {
+function buildCover(
+  rows: ResponseRow[],
+  lang: Lang,
+  t: ReturnType<typeof L>,
+  survey?: Survey,
+): Paragraph[] {
   const n = rows.length
   const { nps } = npsBreakdown(rows)
   const today = new Date().toLocaleDateString(lang === 'en' ? 'en-GB' : 'nl-BE', {
     day: '2-digit', month: 'long', year: 'numeric',
   })
+  const badge = survey?.series_name ?? t.coverBadge
+  const title = survey ? (lang === 'en' ? survey.title_en : survey.title_nl) : t.coverTitle
+  const sub = survey
+    ? ((lang === 'en' ? survey.subtitle_en : survey.subtitle_nl) ?? t.coverSub)
+    : t.coverSub
 
   return [
     new Paragraph({ children: [new TextRun({ text: '' })], spacing: { before: 1800 } }),
     new Paragraph({
       alignment: AlignmentType.CENTER,
       spacing: { after: 200 },
-      children: [new TextRun({ text: t.coverBadge, italics: true, color: COLORS.tealDark, size: 22 })],
+      children: [new TextRun({ text: badge, italics: true, color: COLORS.tealDark, size: 22 })],
     }),
     new Paragraph({
       alignment: AlignmentType.CENTER,
       spacing: { after: 200 },
-      children: [new TextRun({ text: t.coverTitle, bold: true, color: COLORS.tealDark, size: 56 })],
+      children: [new TextRun({ text: title, bold: true, color: COLORS.tealDark, size: 56 })],
     }),
     new Paragraph({
       alignment: AlignmentType.CENTER,
       spacing: { after: 800 },
-      children: [new TextRun({ text: t.coverSub, italics: true, color: COLORS.inkSoft, size: 26 })],
+      children: [new TextRun({ text: sub, italics: true, color: COLORS.inkSoft, size: 26 })],
     }),
     new Paragraph({
       alignment: AlignmentType.CENTER,
@@ -940,6 +951,7 @@ export async function buildSurveyDocx(
   rows: ResponseRow[],
   analysis: AnalysisResult | null,
   lang: Lang,
+  survey?: Survey,
 ): Promise<Uint8Array> {
   const t = L(lang)
 
@@ -952,7 +964,7 @@ export async function buildSurveyDocx(
           margin: { top: 1440, bottom: 1440, left: 1440, right: 1440 }, // 1 inch
         },
       },
-      children: buildCover(rows, lang, t),
+      children: buildCover(rows, lang, t, survey),
     },
     // Section 2: rest of the report (landscape with header/footer + page numbers)
     {

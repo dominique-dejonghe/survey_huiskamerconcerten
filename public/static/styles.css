@@ -893,3 +893,198 @@ body.pdf-rendering .pdf-cover {
   .admin-section { box-shadow: none; border: 1px solid #ccc; page-break-inside: avoid; }
   .ai-section { background: #fff; }
 }
+
+/* ============================================================
+   Multi-survey: brand variables (defaults)
+   ============================================================ */
+:root {
+  --brand-primary: #5B1F2A;
+  --brand-accent: #F4A93C;
+  --brand-surface: #FBF8F2;
+}
+body.brand-ebdiep {
+  --brand-primary: #3C587E;
+  --brand-accent: #D8942B;
+  --brand-surface: #F8FAFC;
+}
+
+/* ============================================================
+   Landing page (/, /en)
+   ============================================================ */
+body.survey-body { background: #FBF8F2; }
+.landing-header {
+  background: #fff;
+  border-bottom: 1px solid #EAE3D6;
+  padding: 16px 0;
+}
+.landing-header-inner {
+  max-width: 1100px; margin: 0 auto; padding: 0 24px;
+  display: flex; align-items: center; justify-content: space-between;
+}
+.landing-brand-line {
+  font-family: 'Playfair Display', serif; font-size: 18px; color: #1a1a1a;
+  text-decoration: none;
+}
+.landing-nav .lang-switch {
+  color: #555; text-decoration: none; font-size: 14px;
+  padding: 6px 12px; border: 1px solid #d8d2c2; border-radius: 6px;
+}
+.landing-nav .lang-switch:hover { background: #FBF8F2; }
+
+.landing-main { max-width: 1100px; margin: 0 auto; padding: 48px 24px 64px; }
+.landing-hero { text-align: center; margin-bottom: 48px; }
+.landing-hero h1 {
+  font-family: 'Playfair Display', serif; font-weight: 600;
+  font-size: 38px; color: #1a1a1a; margin: 0 0 16px;
+}
+.landing-intro {
+  max-width: 640px; margin: 0 auto; color: #444; line-height: 1.6;
+  font-size: 16px;
+}
+.landing-empty {
+  background: #fff; border-radius: 8px; padding: 48px 32px;
+  text-align: center; color: #666; box-shadow: 0 1px 3px rgba(0,0,0,0.04);
+}
+
+.landing-brand-section {
+  margin-top: 48px;
+  --bp: var(--brand-primary, #5B1F2A);
+  --ba: var(--brand-accent, #F4A93C);
+}
+.landing-brand-header {
+  display: flex; align-items: center; gap: 16px;
+  border-bottom: 2px solid var(--ba);
+  padding-bottom: 12px; margin-bottom: 24px;
+}
+.landing-brand-logo {
+  height: 48px; width: auto; object-fit: contain;
+}
+.landing-brand-header h2 {
+  font-family: 'Playfair Display', serif; font-weight: 600;
+  margin: 0; font-size: 24px; color: var(--bp);
+}
+.landing-survey-grid {
+  display: grid; gap: 20px;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+}
+.landing-card {
+  background: #fff; border: 1px solid #EAE3D6; border-radius: 10px;
+  padding: 24px; text-decoration: none; color: #1a1a1a;
+  transition: transform 0.15s, box-shadow 0.15s, border-color 0.15s;
+  display: flex; flex-direction: column; gap: 8px;
+  border-top: 4px solid var(--bp);
+}
+.landing-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 8px 20px rgba(0,0,0,0.08);
+  border-color: var(--ba);
+}
+.landing-card-series { color: var(--bp); font-size: 13px; }
+.landing-card h3 {
+  font-family: 'Playfair Display', serif; font-weight: 600;
+  font-size: 20px; margin: 4px 0 0; color: #1a1a1a;
+}
+.landing-card-sub { color: #666; font-size: 14px; margin: 0 0 8px; font-style: italic; }
+.landing-card-meta {
+  display: flex; flex-wrap: wrap; gap: 16px; font-size: 13px; color: #555;
+  margin: 8px 0; padding: 0;
+}
+.landing-card-meta div { margin: 0; }
+.landing-card-meta dt { font-weight: 700; color: #888; font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; }
+.landing-card-meta dd { margin: 2px 0 0; color: #333; }
+.landing-card-cta {
+  margin-top: auto; padding-top: 12px; color: var(--bp); font-weight: 700; font-size: 14px;
+}
+
+.landing-footer {
+  text-align: center; padding: 32px 24px; color: #888; font-size: 13px;
+  border-top: 1px solid #EAE3D6; margin-top: 48px;
+}
+.landing-footer a { color: #555; }
+
+/* ============================================================
+   Site logo (per brand)
+   ============================================================ */
+.site-logo-link { display: inline-flex; align-items: center; }
+.site-logo {
+  height: 40px; width: auto; object-fit: contain;
+}
+
+/* ============================================================
+   Admin overview (multi-survey list)
+   ============================================================ */
+.overview-hero {
+  background: linear-gradient(135deg, #fff 0%, #FBF8F2 100%);
+}
+.survey-grid {
+  display: grid; gap: 20px;
+  grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+}
+.survey-card {
+  --bp: var(--brand-primary, #5B1F2A);
+  --ba: var(--brand-accent, #F4A93C);
+  background: #fff; border: 1px solid #EAE3D6; border-radius: 10px;
+  padding: 20px; text-decoration: none; color: #1a1a1a;
+  display: flex; flex-direction: column; gap: 12px;
+  border-top: 4px solid var(--bp);
+  transition: transform 0.15s, box-shadow 0.15s;
+}
+.survey-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 6px 16px rgba(0,0,0,0.06);
+}
+.survey-card-header {
+  display: flex; align-items: center; gap: 10px;
+  font-size: 13px; color: #666;
+}
+.survey-card-logo { height: 28px; width: auto; object-fit: contain; }
+.survey-card-brand { color: var(--bp); }
+.survey-card-series { font-style: italic; color: #888; }
+.status-pill {
+  margin-left: auto; padding: 3px 10px; border-radius: 12px;
+  font-size: 11px; font-weight: 700; text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.status-open { background: #E6F4EA; color: #2E7D32; }
+.status-closed { background: #FCE8E6; color: #B73229; }
+.status-archived { background: #F5F5F5; color: #555; }
+.survey-card h3 {
+  font-family: 'Playfair Display', serif; font-weight: 600;
+  margin: 0; font-size: 19px; color: #1a1a1a;
+}
+.survey-card-sub { color: #666; font-size: 13px; margin: 0; font-style: italic; }
+.survey-card-stats {
+  display: flex; gap: 20px; padding: 12px 0; border-top: 1px solid #f0eada; border-bottom: 1px solid #f0eada;
+}
+.survey-card-stats .stat {
+  display: flex; flex-direction: column; flex: 1;
+}
+.survey-card-stats .stat-num { font-size: 22px; font-weight: 700; color: #1a1a1a; line-height: 1; }
+.survey-card-stats .stat-num.small { font-size: 13px; color: #555; }
+.survey-card-stats .stat-label { font-size: 11px; color: #888; text-transform: uppercase; letter-spacing: 0.04em; margin-top: 4px; }
+.survey-card-stats .nps-good .stat-num { color: #2E7D32; }
+.survey-card-stats .nps-mid .stat-num { color: #F4A93C; }
+.survey-card-stats .nps-low .stat-num { color: #B73229; }
+.survey-card-stats .nps-empty .stat-num { color: #aaa; }
+.survey-card-actions {
+  display: flex; align-items: center; justify-content: space-between;
+  margin-top: auto;
+}
+.survey-card-cta { color: var(--bp); font-weight: 700; font-size: 14px; }
+.survey-card-link {
+  font-size: 11px; color: #888; text-decoration: none;
+  font-family: monospace;
+}
+.survey-card-link:hover { color: var(--bp); }
+
+.brand-pill-row { display: flex; flex-wrap: wrap; gap: 12px; }
+.brand-pill {
+  display: inline-flex; align-items: center; gap: 8px;
+  padding: 8px 14px; background: #fff;
+  border-left: 3px solid var(--brand-primary);
+  border-radius: 4px; font-size: 14px;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+}
+.brand-pill-logo { height: 22px; width: auto; }
+.brand-pill-name { font-weight: 700; color: #1a1a1a; }
+.brand-pill-prefix { color: #888; font-family: monospace; font-size: 12px; }

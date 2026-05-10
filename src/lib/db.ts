@@ -4,6 +4,7 @@ import { uuid } from './crypto'
 
 export type ResponseRow = {
   id: string
+  survey_id: number
   submitted_at: string
   ip_hash: string | null
   user_agent: string | null
@@ -35,12 +36,13 @@ export type ResponseRow = {
 export async function insertResponse(
   db: D1Database,
   data: ResponseInput,
-  meta: { ipHash: string; userAgent: string },
+  meta: { ipHash: string; userAgent: string; surveyId?: number },
 ): Promise<string> {
   const id = uuid()
+  const surveyId = meta.surveyId ?? 1
   await db.prepare(`
     INSERT INTO responses (
-      id, ip_hash, user_agent, lang,
+      id, survey_id, ip_hash, user_agent, lang,
       q1_nps, q2_blijft_bij, q3_aantal,
       q4_sfeer, q5_sfeer_open,
       q6_akoestiek, q7_fortepiano,
@@ -50,7 +52,7 @@ export async function insertResponse(
       q15_wensen_2, q16_gasten, q17_terugkomen, q18_overige,
       q19_naam, q20_contact, q20_email
     ) VALUES (
-      ?, ?, ?, ?,
+      ?, ?, ?, ?, ?,
       ?, ?, ?,
       ?, ?,
       ?, ?,
@@ -61,7 +63,7 @@ export async function insertResponse(
       ?, ?, ?
     )
   `).bind(
-    id, meta.ipHash, meta.userAgent, data.lang || 'nl',
+    id, surveyId, meta.ipHash, meta.userAgent, data.lang || 'nl',
     data.q1_nps, nz(data.q2_blijft_bij), data.q3_aantal,
     data.q4_sfeer, nz(data.q5_sfeer_open),
     data.q6_akoestiek, nz(data.q7_fortepiano),
@@ -82,7 +84,15 @@ function nz(v: string | null | undefined): string | null {
   return t.length === 0 ? null : t
 }
 
-export async function listResponses(db: D1Database): Promise<ResponseRow[]> {
+export async function listResponses(db: D1Database, surveyId?: number): Promise<ResponseRow[]> {
+  if (typeof surveyId === 'number') {
+    const r = await db.prepare(`
+      SELECT * FROM responses
+      WHERE deleted_at IS NULL AND survey_id = ?
+      ORDER BY submitted_at DESC
+    `).bind(surveyId).all<ResponseRow>()
+    return r.results ?? []
+  }
   const r = await db.prepare(`
     SELECT * FROM responses
     WHERE deleted_at IS NULL
@@ -100,7 +110,13 @@ export async function softDeleteResponse(db: D1Database, id: string): Promise<vo
   await db.prepare("UPDATE responses SET deleted_at = datetime('now') WHERE id = ?").bind(id).run()
 }
 
-export async function deleteAllResponses(db: D1Database): Promise<number> {
+export async function deleteAllResponses(db: D1Database, surveyId?: number): Promise<number> {
+  if (typeof surveyId === 'number') {
+    const r = await db.prepare(
+      "UPDATE responses SET deleted_at = datetime('now') WHERE deleted_at IS NULL AND survey_id = ?"
+    ).bind(surveyId).run()
+    return r.meta?.changes ?? 0
+  }
   const r = await db.prepare("UPDATE responses SET deleted_at = datetime('now') WHERE deleted_at IS NULL").run()
   return r.meta?.changes ?? 0
 }

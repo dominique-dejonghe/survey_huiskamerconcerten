@@ -1,6 +1,6 @@
--- Test response om end-to-end werking te demonstreren
+-- Test response om end-to-end werking te demonstreren (gekoppeld aan survey 1 = Reeks I)
 INSERT OR IGNORE INTO responses (
-  id, submitted_at, ip_hash, user_agent,
+  id, survey_id, submitted_at, ip_hash, user_agent,
   q1_nps, q2_blijft_bij, q3_aantal,
   q4_sfeer, q5_sfeer_open,
   q6_akoestiek, q7_fortepiano,
@@ -12,6 +12,7 @@ INSERT OR IGNORE INTO responses (
   q19_naam, q20_contact, q20_email
 ) VALUES (
   'seed-test-0001',
+  1,
   datetime('now', '-2 days'),
   'seed_hash',
   'Mozilla/5.0 (Test)',

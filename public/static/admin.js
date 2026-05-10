@@ -38,6 +38,28 @@
 
   var state = { responses: [], stats: null, activeOpenTab: 'q15_wensen_2', search: '', sortKey: 'submitted_at', sortDir: 'desc' };
 
+  // ====== Multi-survey scope ======
+  // The surveyId is read from <main class="admin-main" data-survey-id="..."> set by the server.
+  // All admin API calls add ?survey=<id> so the backend filters per survey.
+  var SURVEY_ID = (function () {
+    var el = document.querySelector('.admin-main');
+    if (el && el.getAttribute('data-survey-id')) {
+      var n = parseInt(el.getAttribute('data-survey-id'), 10);
+      if (!isNaN(n) && n > 0) return n;
+    }
+    return 1;
+  })();
+  function api(path, params) {
+    // append ?survey=X (or &survey=X) to any /api/admin/* path
+    params = params || {};
+    params.survey = SURVEY_ID;
+    var qs = Object.keys(params).map(function (k) {
+      return encodeURIComponent(k) + '=' + encodeURIComponent(params[k]);
+    }).join('&');
+    var sep = path.indexOf('?') >= 0 ? '&' : '?';
+    return path + sep + qs;
+  }
+
   function fmtNL(iso) {
     if (!iso) return '';
     var s = String(iso).replace(' ', 'T');
@@ -228,7 +250,7 @@
   document.getElementById('deleteAllBtn').addEventListener('click', function () {
     var first = prompt('Type "WIS" om alle responses te verwijderen. Dit kan niet ongedaan gemaakt worden.');
     if (first !== 'WIS') return;
-    fetch('/api/admin/responses', { method: 'DELETE' })
+    fetch(api('/api/admin/responses'), { method: 'DELETE', credentials: 'same-origin' })
       .then(function (r) { return r.json(); })
       .then(function (j) {
         alert('Verwijderd: ' + (j.deleted || 0) + ' responses');
@@ -237,7 +259,7 @@
   });
 
   function loadData() {
-    fetch('/api/admin/responses', { credentials: 'same-origin' })
+    fetch(api('/api/admin/responses'), { credentials: 'same-origin' })
       .then(function (r) {
         if (r.status === 401) { window.location.href = '/admin/login'; return null; }
         return r.json();
@@ -388,7 +410,7 @@
     }
     aiState.generating = true;
     renderLoading();
-    var url = '/api/admin/analyze?lang=' + aiState.lang + (force ? '&force=1' : '');
+    var url = api('/api/admin/analyze', force ? { lang: aiState.lang, force: '1' } : { lang: aiState.lang });
     fetch(url, { method: 'POST', credentials: 'same-origin' })
       .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, status: r.status, body: j }; }); })
       .then(function (res) {
@@ -407,7 +429,7 @@
   }
 
   function loadCached() {
-    fetch('/api/admin/analyze?lang=' + aiState.lang, { credentials: 'same-origin' })
+    fetch(api('/api/admin/analyze', { lang: aiState.lang }), { credentials: 'same-origin' })
       .then(function (r) { return r.json(); })
       .then(function (j) {
         if (j && j.analysis) {
@@ -499,7 +521,7 @@
       ? Promise.resolve()
       : new Promise(function (resolve) {
           showOverlay('AI-analyse wordt gegenereerd…');
-          fetch('/api/admin/analyze?lang=' + aiState.lang, { method: 'POST', credentials: 'same-origin' })
+          fetch(api('/api/admin/analyze', { lang: aiState.lang }), { method: 'POST', credentials: 'same-origin' })
             .then(function (r) { return r.json(); })
             .then(function (j) {
               if (j && j.analysis) {
@@ -601,7 +623,7 @@
   if (docxBtn) {
     docxBtn.addEventListener('click', function () {
       var lang = (aiState && aiState.lang) || 'nl';
-      var url = '/api/admin/export?format=docx&lang=' + encodeURIComponent(lang);
+      var url = api('/api/admin/export', { format: 'docx', lang: lang });
 
       // Visual feedback: temporarily disable the button so the user knows the
       // server is working (docx build can take 1-3 seconds for large datasets).
@@ -619,4 +641,10 @@
       }, 4000);
     });
   }
+})();
+);
+   });
+  }
+})();
+}
 })();

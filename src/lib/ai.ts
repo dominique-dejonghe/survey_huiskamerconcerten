@@ -393,10 +393,14 @@ function normalise(j: any, count: number, lang: Lang): AnalysisResult {
 // ---- Cache helpers (24h TTL, per-lang row in analysis_cache) ----
 const CACHE_TTL_MS = 24 * 60 * 60 * 1000
 
-export async function getCachedAnalysis(db: D1Database, lang: Lang): Promise<AnalysisResult | null> {
+export async function getCachedAnalysis(
+  db: D1Database,
+  lang: Lang,
+  surveyId: number = 1,
+): Promise<AnalysisResult | null> {
   const row = await db
-    .prepare('SELECT generated_at, response_count, payload FROM analysis_cache WHERE lang = ?')
-    .bind(lang)
+    .prepare('SELECT generated_at, response_count, payload FROM analysis_cache WHERE survey_id = ? AND lang = ?')
+    .bind(surveyId, lang)
     .first<{ generated_at: string; response_count: number; payload: string }>()
   if (!row) return null
   // SQLite returns "YYYY-MM-DD HH:MM:SS" UTC — parse safely
@@ -408,24 +412,34 @@ export async function getCachedAnalysis(db: D1Database, lang: Lang): Promise<Ana
   } catch { return null }
 }
 
-export async function saveCachedAnalysis(db: D1Database, lang: Lang, result: AnalysisResult): Promise<void> {
+export async function saveCachedAnalysis(
+  db: D1Database,
+  lang: Lang,
+  result: AnalysisResult,
+  surveyId: number = 1,
+): Promise<void> {
   await db
     .prepare(`
-      INSERT INTO analysis_cache (lang, generated_at, response_count, payload)
-      VALUES (?, datetime('now'), ?, ?)
-      ON CONFLICT(lang) DO UPDATE SET
+      INSERT INTO analysis_cache (survey_id, lang, generated_at, response_count, payload)
+      VALUES (?, ?, datetime('now'), ?, ?)
+      ON CONFLICT(survey_id, lang) DO UPDATE SET
         generated_at = datetime('now'),
         response_count = excluded.response_count,
         payload = excluded.payload
     `)
-    .bind(lang, result.response_count, JSON.stringify(result))
+    .bind(surveyId, lang, result.response_count, JSON.stringify(result))
     .run()
 }
 
-export async function clearCachedAnalysis(db: D1Database, lang?: Lang): Promise<void> {
-  if (lang) {
-    await db.prepare('DELETE FROM analysis_cache WHERE lang = ?').bind(lang).run()
-  } else {
-    await db.prepare('DELETE FROM analysis_cache').run()
-  }
+export async function clearCachedAnalysis(
+  db: D1Database,
+  lang?: Lang,
+  surveyId?: number,
+): Promise<void> {
+  const conditions: string[] = []
+  const args: any[] = []
+  if (typeof surveyId === 'number') { conditions.push('survey_id = ?'); args.push(surveyId) }
+  if (lang) { conditions.push('lang = ?'); args.push(lang) }
+  const sql = 'DELETE FROM analysis_cache' + (conditions.length ? ' WHERE ' + conditions.join(' AND ') : '')
+  await db.prepare(sql).bind(...args).run()
 }

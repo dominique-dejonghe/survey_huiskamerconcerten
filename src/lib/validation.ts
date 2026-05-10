@@ -8,6 +8,11 @@ export const responseSchema = z.object({
   // Taalcode (nl default)
   lang: z.enum(['nl', 'en']).optional().default('nl'),
 
+  // Multi-survey identification (optional; falls back to survey 1 = Reeks I)
+  survey_id: z.number().int().positive().optional(),
+  brand_prefix: z.string().max(8).optional(),
+  survey_slug: z.string().max(120).optional(),
+
   q1_nps: z.number().int().min(0).max(10),
   q2_blijft_bij: z.string().max(2000).optional().nullable(),
   q3_aantal: z.enum(['1', '2', '3', '4', '5', 'alle 6']),
