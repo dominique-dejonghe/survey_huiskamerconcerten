@@ -208,15 +208,20 @@
   }
 
   // ----- 5. Submit guard -----
+  // In create-mode: require at least one question checkbox so we never create an
+  // empty survey. In edit-mode: questions are managed in a SEPARATE section below
+  // the main form (each row has its own POST), so the main form no longer carries
+  // any question checkboxes — checking qChecks here would always be 0 and would
+  // wrongly block every save. So we skip the check entirely in edit-mode.
   if (form && submitBtn) {
     form.addEventListener('submit', function (e) {
-      var n = qChecks.filter(function (c) { return c.checked; }).length;
-      if (n === 0) {
-        e.preventDefault();
-        alert(isEditMode
-          ? 'Selecteer minstens één vraag voor je opslaat.'
-          : 'Selecteer minstens één vraag voor je de enquête aanmaakt.');
-        return;
+      if (!isEditMode) {
+        var n = qChecks.filter(function (c) { return c.checked; }).length;
+        if (n === 0) {
+          e.preventDefault();
+          alert('Selecteer minstens één vraag voor je de enquête aanmaakt.');
+          return;
+        }
       }
       // disable to prevent double-submit
       submitBtn.disabled = true;
