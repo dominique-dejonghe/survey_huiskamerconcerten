@@ -1,6 +1,6 @@
 import type { FC } from 'hono/jsx'
 import { Layout } from './layout'
-import type { Brand, Survey, LibraryQuestion } from '../lib/surveys'
+import type { Brand, Survey, LibraryQuestion, SurveyQuestion } from '../lib/surveys'
 import type { ListSurveysWithStatsRow } from '../lib/surveys'
 import { v } from '../lib/version'
 
@@ -76,7 +76,7 @@ export const AdminOverviewPage: FC<{
       <header class="admin-header">
         <h1>📊 Pensato.org · admin</h1>
         <div class="spacer"></div>
-        <a href="/admin/questions" class="btn btn-ghost" title="Beheer de vragen-bibliotheek">📚 Vragenbibliotheek</a>
+        <a href="/admin/questions" class="btn btn-ghost" title="Beheer de sjabloon-bibliotheek (raakt bestaande enquêtes niet)">📚 Sjabloon-bibliotheek</a>
         <a href="/admin/logout" class="btn btn-ghost">Uitloggen</a>
       </header>
       <main class="admin-main">
@@ -616,14 +616,18 @@ export const NewSurveyPage: FC<{
 export const EditSurveyPage: FC<{
   survey: Survey
   brands: Brand[]
-  questions: LibraryQuestion[]
+  /** Full library of available template questions (for the "add from library" picker). */
+  libraryQuestions: LibraryQuestion[]
+  /** This survey's own snapshot — independent from the library. */
+  surveyQuestions: SurveyQuestion[]
   error?: string
   flash?: string
-}> = ({ survey, brands, questions, error, flash }) => {
-  const groups = groupQuestions(questions)
+}> = ({ survey, brands, libraryQuestions, surveyQuestions, error, flash }) => {
   const brand = brands.find(b => b.id === survey.brand_id)
-  const selectedSet = new Set(survey.question_codes)
   const prefix = brand?.url_prefix || (survey.brand_id === 'huiskamer' ? 'h' : 'e')
+  // Library questions NOT yet in this survey — eligible for "add from library"
+  const surveyCodeSet = new Set(surveyQuestions.map(q => q.code))
+  const libraryAvailable = libraryQuestions.filter(q => !surveyCodeSet.has(q.code))
 
   return (
     <Layout title={`${survey.title_nl} — bewerken`} admin>
@@ -748,44 +752,20 @@ export const EditSurveyPage: FC<{
             </p>
           </section>
 
-          {/* ───────── Question picker ───────── */}
+          {/* ───────── Question section pointer (real management is below, outside main form) ───────── */}
           <section class="admin-section">
             <h2>4. Vragen</h2>
-            <div class="form-actions-inline">
-              <span class="form-hint">Voeg vragen toe of haal ze weg (geselecteerde: <strong id="qCount">{survey.question_codes.length}</strong>).</span>
-              <span class="spacer"></span>
-              <a href="/admin/questions/new" target="_blank" rel="noopener" class="btn btn-ghost btn-small" title="Nieuwe vraag toevoegen aan de bibliotheek (opent nieuw tabblad)">+ Nieuwe vraag</a>
-              <button type="button" class="btn btn-ghost btn-small" id="qSelectAll">Alles aan</button>
-              <button type="button" class="btn btn-ghost btn-small" id="qSelectNone">Alles uit</button>
-            </div>
-            <p class="form-helper" style="margin-top:-4px;">
-              Vragen bewerken of toevoegen aan de bibliotheek opent een nieuw tabblad. Sla daarna eerst je vraag op,
-              kom hier terug en <strong>herlaad de pagina</strong> om de bijgewerkte bibliotheek te zien.
+            <p class="form-hint">
+              Deze enquête bevat <strong>{surveyQuestions.length} vragen</strong>. Wijzigingen aan de vragen worden
+              direct opgeslagen — je hoeft dit hoofdformulier daarvoor niet te bevestigen. Scroll naar
+              <strong> "Vragen in deze enquête"</strong> onderaan om vragen te bewerken, te verwijderen of
+              toe te voegen.
             </p>
-
-            {groups.map(({ category, items }) => (
-              <div class="question-group">
-                <h3 class="question-group-title">{CATEGORY_LABELS[category] ?? category}</h3>
-                <div class="question-list">
-                  {items.map(q => {
-                    const checkedAttr = selectedSet.has(q.code) ? { checked: true } : {}
-                    return (
-                      <div class="question-item-row">
-                        <label class="question-item">
-                          <input type="checkbox" name="question_codes" value={q.code} class="q-check" {...checkedAttr} />
-                          <span class="q-code">{q.code}</span>
-                          <span class="q-text">{q.label_nl}</span>
-                          <span class="q-type">{q.type}{q.required ? ' · verplicht' : ''}</span>
-                        </label>
-                        <a href={`/admin/questions/${q.code}/edit`} target="_blank" rel="noopener"
-                           class="btn btn-ghost btn-tiny q-edit-link" title={`Bewerk "${q.code}" in nieuw tabblad`}
-                           aria-label={`Bewerk vraag ${q.code}`}>✏️ Bewerk</a>
-                      </div>
-                    )
-                  })}
-                </div>
-              </div>
-            ))}
+            <p class="form-helper">
+              <em>De bibliotheek is een sjabloon</em>: nieuwe enquêtes starten met een kopie van bibliotheek-vragen,
+              maar daarna leeft elke enquête zijn eigen leven. Wijzigingen aan de bibliotheek hebben géén
+              terugwerkende kracht op bestaande enquêtes.
+            </p>
           </section>
 
           {/* ───────── Intro & thanks copy ───────── */}
@@ -831,6 +811,70 @@ export const EditSurveyPage: FC<{
             <button type="submit" class="btn btn-teal" id="submitBtn">Wijzigingen opslaan</button>
           </section>
         </form>
+
+        {/* ───────── Vragen in deze enquête (eigen snapshot — los van bibliotheek) ───────── */}
+        <section class="admin-section survey-questions-section">
+          <h2>Vragen in deze enquête</h2>
+          <p class="form-hint">
+            Dit is de <strong>eigen kopie</strong> van vragen voor deze enquête. Bewerken hier wijzigt
+            <strong> alleen deze enquête</strong>, niet de bibliotheek of andere enquêtes.
+          </p>
+
+          {/* Add-from-library + add new actions */}
+          <div class="form-actions-inline" style="margin-bottom:14px;">
+            <form method="POST" action={`/admin/surveys/${survey.id}/questions/add-from-library`}
+              class="inline-form add-from-lib-form">
+              <select name="library_code" required>
+                <option value="">— kies een vraag uit de bibliotheek —</option>
+                {libraryAvailable.length === 0 ? (
+                  <option value="" disabled>(alle bibliotheek-vragen zitten al in deze enquête)</option>
+                ) : libraryAvailable.map(q => (
+                  <option value={q.code}>{q.code} — {q.label_nl}</option>
+                ))}
+              </select>
+              <button type="submit" class="btn btn-ghost btn-small" disabled={libraryAvailable.length === 0}>
+                ➕ Voeg toe (kopie)
+              </button>
+            </form>
+            <span class="spacer"></span>
+            <a href={`/admin/surveys/${survey.id}/questions/new`} class="btn btn-teal btn-small">
+              + Geheel nieuwe vraag
+            </a>
+          </div>
+
+          {surveyQuestions.length === 0 ? (
+            <p class="form-empty">Deze enquête heeft nog geen vragen. Voeg er een toe met één van de knoppen hierboven.</p>
+          ) : (
+            <div class="survey-question-list">
+              {surveyQuestions.map((q, idx) => (
+                <div class="survey-question-row" data-code={q.code} data-order={String(q.display_order)}>
+                  <span class="sq-order">{idx + 1}.</span>
+                  <span class="sq-code">{q.code}</span>
+                  <div class="sq-main">
+                    <span class="sq-label">{q.label_nl}</span>
+                    <span class="sq-meta">
+                      {q.type}{q.required ? ' · verplicht' : ''}
+                      {q.source_code ? ` · uit bibliotheek (${q.source_code})` : ' · enquête-eigen'}
+                    </span>
+                  </div>
+                  <div class="sq-actions">
+                    <a href={`/admin/surveys/${survey.id}/questions/${q.code}/edit`}
+                       class="btn btn-ghost btn-tiny" title="Bewerk deze vraag (alleen voor deze enquête)">
+                      ✏️ Bewerk
+                    </a>
+                    <form method="POST" action={`/admin/surveys/${survey.id}/questions/${q.code}/delete`}
+                      class="inline-form delete-sq-form">
+                      <button type="submit" class="btn btn-ghost btn-tiny btn-red-text"
+                        title="Verwijder deze vraag uit deze enquête">
+                        🗑
+                      </button>
+                    </form>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </section>
 
         {/* ───────── Danger zone — duplicate / delete (separate mini-forms, OUTSIDE main form) ───────── */}
         <section class="admin-section danger-zone">
@@ -899,10 +943,10 @@ export const QuestionsLibraryPage: FC<{
   })()
 
   return (
-    <Layout title="Vragenbibliotheek — admin" admin>
+    <Layout title="Sjabloon-bibliotheek — admin" admin>
       <header class="admin-header">
         <a href="/admin" class="btn btn-ghost" style="margin-right:auto;">← Alle enquêtes</a>
-        <h1 style="margin:0 0 0 16px;">📚 Vragenbibliotheek</h1>
+        <h1 style="margin:0 0 0 16px;">📚 Sjabloon-bibliotheek</h1>
         <div class="spacer"></div>
         <a href="/admin/questions/import" class="btn btn-ghost" title="Bulk-import via JSON">⬆ Importeer</a>
         <a href="/api/admin/questions/export" class="btn btn-ghost" title="Download alle vragen als JSON">⬇ Exporteer</a>
@@ -915,14 +959,18 @@ export const QuestionsLibraryPage: FC<{
         {error ? <div class="form-error" role="alert"><strong>Fout:</strong> {error}</div> : null}
 
         <section class="admin-section overview-hero">
-          <h2 style="margin-top:0;">Bibliotheek</h2>
+          <h2 style="margin-top:0;">Sjablonen voor enquêtevragen</h2>
           <p style="color:#555;">
-            {questions.length} vragen · gegroepeerd per categorie · enquêtes mengen vragen uit deze bibliotheek.
+            {questions.length} sjablonen · gegroepeerd per categorie · gebruik deze als startpunt bij het aanmaken van een nieuwe enquête.
           </p>
-          <p class="form-hint" style="margin-bottom:0;">
-            <strong>Belangrijk:</strong> de <code>code</code> van een vraag is de identifier — die kan je niet wijzigen na aanmaken.
-            Wijzig je het type van een bestaande vraag, dan blijven oude antwoorden in de oude vorm bewaard
-            (de admin-tabel toont ze nog correct).
+          <p class="form-hint" style="margin-bottom:0;background:#fff8e1;border-left:3px solid #f5a623;padding:10px 12px;">
+            <strong>⚠️ Let op — dit is een sjabloon-bibliotheek.</strong> Wijzigingen hier hebben <strong>geen</strong> effect
+            op bestaande enquêtes. Elke enquête heeft sinds versie 2026-05-11 haar eigen, onafhankelijke kopie van de vragen
+            (een snapshot op het moment dat de vraag aan de enquête werd toegevoegd). Wil je een vraag in een lopende enquête
+            aanpassen? Doe dat dan vanuit het bewerk-scherm van die enquête zelf.
+          </p>
+          <p class="form-hint" style="margin-bottom:0;margin-top:8px;">
+            <strong>Belangrijk:</strong> de <code>code</code> van een sjabloon is de identifier — die kan je niet wijzigen na aanmaken.
           </p>
         </section>
 
@@ -1205,6 +1253,208 @@ export const QuestionEditorPage: FC<{
           {/* ───────── Submit ───────── */}
           <section class="admin-section form-submit-row">
             <a href="/admin/questions" class="btn btn-ghost">Annuleren</a>
+            <span class="spacer"></span>
+            <button type="submit" class="btn btn-teal" id="submitBtn">{submitLabel}</button>
+          </section>
+        </form>
+      </main>
+
+      <script src={v('/static/admin-questions.js')} defer></script>
+    </Layout>
+  )
+}
+
+// ============================================================
+// SURVEY-SCOPED QUESTION EDITOR — edits a row in `survey_questions`,
+// completely independent from the library. Reuses the same form layout
+// as QuestionEditorPage but posts to /admin/surveys/:id/questions[/:code].
+// ============================================================
+
+export const SurveyQuestionEditorPage: FC<{
+  mode: 'new' | 'edit'
+  survey: Survey
+  question: SurveyQuestion | null
+  error?: string
+  formData?: Record<string, string>
+}> = ({ mode, survey, question, error }) => {
+  const isEdit = mode === 'edit'
+  const q = question
+  const action = isEdit
+    ? `/admin/surveys/${survey.id}/questions/${q!.code}`
+    : `/admin/surveys/${survey.id}/questions`
+  const heading = isEdit ? `⚙ Bewerk vraag: ${q!.code}` : '+ Geheel nieuwe vraag in deze enquête'
+  const submitLabel = isEdit ? 'Wijzigingen opslaan' : 'Vraag aanmaken'
+  const initialType = q?.type || 'text'
+
+  return (
+    <Layout title={`${isEdit ? q!.code : 'Nieuwe vraag'} — ${survey.title_nl}`} admin>
+      <header class="admin-header">
+        <a href={`/admin/surveys/${survey.id}/edit`} class="btn btn-ghost" style="margin-right:auto;">
+          ← {survey.title_nl}
+        </a>
+        <h1 style="margin:0 0 0 16px;">{heading}</h1>
+        <div class="spacer"></div>
+        <a href="/admin/logout" class="btn btn-ghost">Uitloggen</a>
+      </header>
+
+      <main class="admin-main new-survey-form" data-question-mode={mode} data-initial-type={initialType}>
+        {error ? (
+          <div class="form-error" role="alert">
+            <strong>Niet opgeslagen:</strong> {error}
+          </div>
+        ) : null}
+
+        <div class="usage-notice" role="note">
+          <strong>Belangrijk:</strong> deze vraag bestaat <strong>alleen voor de enquête "{survey.title_nl}"</strong>.
+          Wijzigingen hier raken géén andere enquête, en evenmin de bibliotheek.
+          {q?.source_code ? (
+            <> Deze vraag is oorspronkelijk gekopieerd uit bibliotheek-vraag <code>{q.source_code}</code>;
+              de link met de bibliotheek is daarna doorgeknipt.</>
+          ) : null}
+        </div>
+
+        <form method="POST" action={action} id="questionForm" autocomplete="off">
+          {/* ───────── Identifier ───────── */}
+          <section class="admin-section">
+            <h2>1. Identifier</h2>
+            <div class="form-grid">
+              <div class="form-field">
+                <label for="code">Code <span class="req">*</span></label>
+                <input type="text" id="code" name="code"
+                  value={q?.code ?? ''}
+                  required
+                  pattern="[a-z][a-z0-9_]*"
+                  maxLength={50}
+                  readOnly={isEdit}
+                  placeholder="bv. q21_specifiek" />
+                <span class="form-helper">
+                  {isEdit
+                    ? 'Code is uniek binnen deze enquête en niet meer wijzigbaar.'
+                    : 'Begin met een kleine letter; alleen kleine letters, cijfers en underscores.'}
+                </span>
+              </div>
+              <div class="form-field">
+                <label for="category">Categorie</label>
+                <input type="text" id="category" name="category"
+                  value={q?.category ?? ''}
+                  list="catSuggestions"
+                  placeholder="bv. algemeen, locatie, muzikaal…" />
+                <datalist id="catSuggestions">
+                  <option value="algemeen" />
+                  <option value="locatie" />
+                  <option value="muzikaal" />
+                  <option value="jos" />
+                  <option value="organisatie" />
+                  <option value="reeks2" />
+                  <option value="totslot" />
+                </datalist>
+              </div>
+              <div class="form-field">
+                <label for="type">Type <span class="req">*</span></label>
+                <select id="type" name="type" required>
+                  {(['nps', 'scale', 'choice', 'text', 'paragraph'] as const).map(t => (
+                    <option value={t} {...(initialType === t ? { selected: true } : {})}>
+                      {TYPE_LABELS[t]}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div class="form-field">
+                <label class="checkbox-label">
+                  <input type="checkbox" name="required" value="1"
+                    {...(q?.required ? { checked: true } : {})} />
+                  <span>Verplicht (respondent moet antwoorden)</span>
+                </label>
+              </div>
+            </div>
+          </section>
+
+          {/* ───────── Labels ───────── */}
+          <section class="admin-section">
+            <h2>2. Vraagtekst</h2>
+            <div class="form-grid">
+              <div class="form-field full">
+                <label for="label_nl">Label NL <span class="req">*</span></label>
+                <input type="text" id="label_nl" name="label_nl" required
+                  value={q?.label_nl ?? ''} maxLength={300}
+                  placeholder="bv. Hoe ervoer je de huiskamer-setting?" />
+              </div>
+              <div class="form-field full">
+                <label for="label_en">Label EN <span class="req">*</span></label>
+                <input type="text" id="label_en" name="label_en" required
+                  value={q?.label_en ?? ''} maxLength={300}
+                  placeholder="e.g. How did you experience the intimate setting?" />
+              </div>
+              <div class="form-field full">
+                <label for="helper_nl">Helper NL</label>
+                <input type="text" id="helper_nl" name="helper_nl"
+                  value={q?.helper_nl ?? ''} maxLength={300}
+                  placeholder="Optionele toelichting onder de vraag" />
+              </div>
+              <div class="form-field full">
+                <label for="helper_en">Helper EN</label>
+                <input type="text" id="helper_en" name="helper_en"
+                  value={q?.helper_en ?? ''} maxLength={300} />
+              </div>
+            </div>
+          </section>
+
+          {/* ───────── Scale fields ───────── */}
+          <section class="admin-section type-section type-section-scale">
+            <h2>3. Schaal-instellingen <span class="form-hint">(voor NPS &amp; schaal)</span></h2>
+            <div class="form-grid">
+              <div class="form-field">
+                <label for="scale_min">Min waarde</label>
+                <input type="number" id="scale_min" name="scale_min" min={0} max={20}
+                  value={q?.scale_min != null ? String(q.scale_min) : ''} />
+              </div>
+              <div class="form-field">
+                <label for="scale_max">Max waarde</label>
+                <input type="number" id="scale_max" name="scale_max" min={1} max={20}
+                  value={q?.scale_max != null ? String(q.scale_max) : ''} />
+              </div>
+              <div class="form-field">
+                <label for="min_label_nl">Label minimum (NL)</label>
+                <input type="text" id="min_label_nl" name="min_label_nl"
+                  value={q?.min_label_nl ?? ''} placeholder="bv. Niet waarschijnlijk" />
+              </div>
+              <div class="form-field">
+                <label for="max_label_nl">Label maximum (NL)</label>
+                <input type="text" id="max_label_nl" name="max_label_nl"
+                  value={q?.max_label_nl ?? ''} placeholder="bv. Absoluut wel" />
+              </div>
+              <div class="form-field">
+                <label for="min_label_en">Label minimum (EN)</label>
+                <input type="text" id="min_label_en" name="min_label_en"
+                  value={q?.min_label_en ?? ''} placeholder="e.g. Not likely" />
+              </div>
+              <div class="form-field">
+                <label for="max_label_en">Label maximum (EN)</label>
+                <input type="text" id="max_label_en" name="max_label_en"
+                  value={q?.max_label_en ?? ''} placeholder="e.g. Extremely likely" />
+              </div>
+            </div>
+          </section>
+
+          {/* ───────── Choice options ───────── */}
+          <section class="admin-section type-section type-section-choice">
+            <h2>4. Keuze-opties <span class="form-hint">(voor type "Keuze")</span></h2>
+            <p class="form-helper">Eén optie per regel. Aantal regels NL en EN moet gelijk zijn.</p>
+            <div class="form-grid">
+              <div class="form-field full">
+                <label for="options_nl">Opties NL</label>
+                <textarea id="options_nl" name="options_nl" rows={6}>{(q?.options_nl ?? []).join('\n')}</textarea>
+              </div>
+              <div class="form-field full">
+                <label for="options_en">Opties EN</label>
+                <textarea id="options_en" name="options_en" rows={6}>{(q?.options_en ?? []).join('\n')}</textarea>
+              </div>
+            </div>
+          </section>
+
+          {/* ───────── Submit ───────── */}
+          <section class="admin-section form-submit-row">
+            <a href={`/admin/surveys/${survey.id}/edit`} class="btn btn-ghost">Annuleren</a>
             <span class="spacer"></span>
             <button type="submit" class="btn btn-teal" id="submitBtn">{submitLabel}</button>
           </section>

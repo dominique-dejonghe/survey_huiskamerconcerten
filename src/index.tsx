@@ -7,6 +7,7 @@ import { LandingPage } from './views/landing'
 import {
   LoginPage, DashboardPage, AdminOverviewPage, NewSurveyPage, EditSurveyPage,
   QuestionsLibraryPage, QuestionEditorPage, QuestionsImportPage,
+  SurveyQuestionEditorPage,
 } from './views/admin'
 import { responseSchema } from './lib/validation'
 import { hashIp } from './lib/crypto'
@@ -34,6 +35,9 @@ import {
   deleteSurvey, duplicateSurvey, getResponseCountForSurvey,
   getLibraryQuestion, createQuestion, updateQuestion, deleteQuestion,
   validateQuestionInput, getSurveysUsingQuestion, importQuestions,
+  listSurveyQuestions, getSurveyQuestion,
+  copyLibraryQuestionToSurvey, createSurveyQuestion,
+  updateSurveyQuestion, deleteSurveyQuestion, reorderSurveyQuestions,
   type QuestionInput,
 } from './lib/surveys'
 import type { Lang } from './lib/i18n'
@@ -367,6 +371,19 @@ app.post('/admin/surveys', async (c) => {
     langDefault,
   })
 
+  // Snapshot every chosen library question into survey_questions, in order.
+  // From this point on the survey owns an independent copy — edits to the
+  // library will NOT retroactively change this survey.
+  for (let i = 0; i < codes.length; i++) {
+    try {
+      await copyLibraryQuestionToSurvey(c.env.DB, created.id, codes[i], i)
+    } catch (e) {
+      // Soft-fail: if a single snapshot fails, log and continue. The survey
+      // is created and the admin can fix gaps from the per-survey question UI.
+      console.error('snapshot failed for', codes[i], e)
+    }
+  }
+
   // Audit log
   const ip = getClientIp(c)
   const ipHash = await hashIp(ip, c.env.IP_HASH_SALT || 'dev')
@@ -397,11 +414,13 @@ app.get('/admin/surveys/:id/edit', async (c) => {
   const survey = await getSurveyById(c.env.DB, id)
   if (!survey) return c.notFound()
   const brands = await listBrands(c.env.DB)
-  const questions = await listLibraryQuestions(c.env.DB)
+  const libraryQuestions = await listLibraryQuestions(c.env.DB)
+  const surveyQuestions = await listSurveyQuestions(c.env.DB, id)
   const error = c.req.query('error') || ''
   const flash = c.req.query('flash') || ''
   return c.html(
-    <EditSurveyPage survey={survey} brands={brands} questions={questions}
+    <EditSurveyPage survey={survey} brands={brands}
+      libraryQuestions={libraryQuestions} surveyQuestions={surveyQuestions}
       error={error} flash={flash} />,
   )
 })
@@ -437,22 +456,17 @@ app.post('/admin/surveys/:id', async (c) => {
   const thanksEn = get('thanks_en')
   const status = (get('status') || existing.status) as 'open' | 'closed' | 'archived'
   const langDefault = (get('lang_default') || existing.lang_default) as 'nl' | 'en'
-  const codes = getAll('question_codes')
+
+  // Note: question-set is no longer edited here. The questions form section was
+  // removed in favor of dedicated routes (add/edit/delete per survey_questions row),
+  // because every survey now has its own snapshot independent of the library.
+  // We keep existing.question_codes unchanged so the legacy column stays in sync
+  // as a cached lookup list, but the source of truth is now `survey_questions`.
 
   const errs: string[] = []
   if (!titleNl) errs.push('Titel (NL) is verplicht.')
-  if (codes.length === 0) errs.push('Selecteer minstens één vraag.')
   if (status !== 'open' && status !== 'closed' && status !== 'archived') {
     errs.push('Ongeldige status.')
-  }
-  if (codes.length > 0) {
-    const placeholders = codes.map(() => '?').join(',')
-    const found = await c.env.DB
-      .prepare(`SELECT code FROM questions WHERE code IN (${placeholders})`)
-      .bind(...codes).all<{ code: string }>()
-    const foundSet = new Set((found.results ?? []).map(r => r.code))
-    const missing = codes.filter(x => !foundSet.has(x))
-    if (missing.length > 0) errs.push(`Onbekende vragen: ${missing.join(', ')}`)
   }
 
   if (errs.length > 0) {
@@ -478,7 +492,7 @@ app.post('/admin/surveys/:id', async (c) => {
     titleEn: titleEn || titleNl,
     subtitleNl: subtitleNl || null,
     subtitleEn: subtitleEn || null,
-    questionCodes: codes,
+    questionCodes: existing.question_codes,
     status,
     langDefault,
     introNl: introNl || null,
@@ -490,7 +504,7 @@ app.post('/admin/surveys/:id', async (c) => {
   const ip = getClientIp(c)
   const ipHash = await hashIp(ip, c.env.IP_HASH_SALT || 'dev')
   await logAudit(c.env.DB, 'survey_update', ipHash, {
-    surveyId: id, slug: finalSlug, questionCount: codes.length,
+    surveyId: id, slug: finalSlug,
   })
 
   return c.redirect(`/admin/surveys/${id}?updated=1`)
@@ -762,6 +776,191 @@ app.post('/admin/questions/:code/delete', async (c) => {
   const ipHash = await hashIp(ip, c.env.IP_HASH_SALT || 'dev')
   await logAudit(c.env.DB, 'question_delete', ipHash, { code })
   return c.redirect('/admin/questions?flash=' + encodeURIComponent(`Vraag "${code}" verwijderd.`))
+})
+
+// ============================================================
+// PER-SURVEY QUESTION ROUTES — each survey owns an isolated snapshot
+// in `survey_questions`. Editing here NEVER touches the library.
+// Uses the same parseQuestionForm() helper as the library routes above.
+// ============================================================
+
+// GET — new question editor scoped to a single survey
+app.get('/admin/surveys/:id/questions/new', async (c) => {
+  const guard = await requireAdmin(c)
+  if (guard) return guard
+  const id = parseInt(c.req.param('id'), 10)
+  const survey = await getSurveyById(c.env.DB, id)
+  if (!survey) return c.notFound()
+  return c.html(<SurveyQuestionEditorPage mode="new" survey={survey}
+    question={null} error={c.req.query('error') || ''} formData={{}} />)
+})
+
+// GET — edit existing survey-scoped question
+app.get('/admin/surveys/:id/questions/:code/edit', async (c) => {
+  const guard = await requireAdmin(c)
+  if (guard) return guard
+  const id = parseInt(c.req.param('id'), 10)
+  const code = c.req.param('code')
+  const survey = await getSurveyById(c.env.DB, id)
+  if (!survey) return c.notFound()
+  const sq = await getSurveyQuestion(c.env.DB, id, code)
+  if (!sq) return c.redirect(`/admin/surveys/${id}/edit?error=` + encodeURIComponent(
+    `Vraag "${code}" bestaat niet in deze enquête.`,
+  ))
+  return c.html(<SurveyQuestionEditorPage mode="edit" survey={survey}
+    question={sq} error={c.req.query('error') || ''} formData={{}} />)
+})
+
+// POST — create new survey-scoped question
+app.post('/admin/surveys/:id/questions', async (c) => {
+  const guard = await requireAdmin(c)
+  if (guard) return guard
+  const id = parseInt(c.req.param('id'), 10)
+  const survey = await getSurveyById(c.env.DB, id)
+  if (!survey) return c.notFound()
+  const form = await c.req.formData()
+  const input = parseQuestionForm(form)
+  const errs = validateQuestionInput(input)
+  // uniqueness within this survey
+  if (input.code && errs.length === 0) {
+    const existing = await getSurveyQuestion(c.env.DB, id, input.code)
+    if (existing) errs.push(`Een vraag met code "${input.code}" bestaat al in deze enquête.`)
+  }
+  if (errs.length > 0) {
+    return c.redirect(`/admin/surveys/${id}/questions/new?error=` + encodeURIComponent(errs.join(' · ')))
+  }
+  await createSurveyQuestion(c.env.DB, id, input as QuestionInput)
+  const ip = getClientIp(c)
+  const ipHash = await hashIp(ip, c.env.IP_HASH_SALT || 'dev')
+  await logAudit(c.env.DB, 'survey_question_create', ipHash, { surveyId: id, code: input.code })
+  return c.redirect(`/admin/surveys/${id}/edit?flash=` + encodeURIComponent(
+    `Nieuwe vraag "${input.code}" toegevoegd aan deze enquête.`,
+  ))
+})
+
+// POST — update existing survey-scoped question
+app.post('/admin/surveys/:id/questions/:code', async (c) => {
+  const guard = await requireAdmin(c)
+  if (guard) return guard
+  const id = parseInt(c.req.param('id'), 10)
+  const code = c.req.param('code')
+  const survey = await getSurveyById(c.env.DB, id)
+  if (!survey) return c.notFound()
+  const existing = await getSurveyQuestion(c.env.DB, id, code)
+  if (!existing) {
+    return c.redirect(`/admin/surveys/${id}/edit?error=` + encodeURIComponent(
+      `Vraag "${code}" bestaat niet (meer) in deze enquête.`,
+    ))
+  }
+  const form = await c.req.formData()
+  const input = { ...parseQuestionForm(form), code }
+  const errs = validateQuestionInput(input)
+  if (errs.length > 0) {
+    return c.redirect(`/admin/surveys/${id}/questions/${code}/edit?error=`
+      + encodeURIComponent(errs.join(' · ')))
+  }
+  const { code: _, ...rest } = input as QuestionInput
+  await updateSurveyQuestion(c.env.DB, id, code, rest)
+  const ip = getClientIp(c)
+  const ipHash = await hashIp(ip, c.env.IP_HASH_SALT || 'dev')
+  await logAudit(c.env.DB, 'survey_question_update', ipHash, { surveyId: id, code })
+  return c.redirect(`/admin/surveys/${id}/edit?flash=` + encodeURIComponent(
+    `Vraag "${code}" bijgewerkt.`,
+  ))
+})
+
+// POST — delete a question from this survey (does NOT touch library)
+app.post('/admin/surveys/:id/questions/:code/delete', async (c) => {
+  const guard = await requireAdmin(c)
+  if (guard) return guard
+  const id = parseInt(c.req.param('id'), 10)
+  const code = c.req.param('code')
+  const survey = await getSurveyById(c.env.DB, id)
+  if (!survey) return c.notFound()
+  await deleteSurveyQuestion(c.env.DB, id, code)
+  // Also keep the legacy question_codes JSON column in sync as a hint to the rest of the app.
+  const remaining = await listSurveyQuestions(c.env.DB, id)
+  await updateSurvey(c.env.DB, id, {
+    slug: survey.slug, seriesName: survey.series_name, artist: survey.artist,
+    concertDate: survey.concert_date, location: survey.location,
+    titleNl: survey.title_nl, titleEn: survey.title_en,
+    subtitleNl: survey.subtitle_nl, subtitleEn: survey.subtitle_en,
+    questionCodes: remaining.map(q => q.code),
+    status: survey.status, langDefault: survey.lang_default,
+    introNl: survey.intro_nl, introEn: survey.intro_en,
+    thanksNl: survey.thanks_nl, thanksEn: survey.thanks_en,
+  })
+  const ip = getClientIp(c)
+  const ipHash = await hashIp(ip, c.env.IP_HASH_SALT || 'dev')
+  await logAudit(c.env.DB, 'survey_question_delete', ipHash, { surveyId: id, code })
+  return c.redirect(`/admin/surveys/${id}/edit?flash=` + encodeURIComponent(
+    `Vraag "${code}" verwijderd uit deze enquête.`,
+  ))
+})
+
+// POST — add a library question to this survey (snapshot copy)
+app.post('/admin/surveys/:id/questions/add-from-library', async (c) => {
+  const guard = await requireAdmin(c)
+  if (guard) return guard
+  const id = parseInt(c.req.param('id'), 10)
+  const survey = await getSurveyById(c.env.DB, id)
+  if (!survey) return c.notFound()
+  const form = await c.req.formData()
+  const libCode = String(form.get('library_code') || '').trim()
+  if (!libCode) {
+    return c.redirect(`/admin/surveys/${id}/edit?error=` + encodeURIComponent('Kies een vraag uit de bibliotheek.'))
+  }
+  try {
+    const r = await copyLibraryQuestionToSurvey(c.env.DB, id, libCode)
+    // Keep legacy column in sync
+    const remaining = await listSurveyQuestions(c.env.DB, id)
+    await updateSurvey(c.env.DB, id, {
+      slug: survey.slug, seriesName: survey.series_name, artist: survey.artist,
+      concertDate: survey.concert_date, location: survey.location,
+      titleNl: survey.title_nl, titleEn: survey.title_en,
+      subtitleNl: survey.subtitle_nl, subtitleEn: survey.subtitle_en,
+      questionCodes: remaining.map(q => q.code),
+      status: survey.status, langDefault: survey.lang_default,
+      introNl: survey.intro_nl, introEn: survey.intro_en,
+      thanksNl: survey.thanks_nl, thanksEn: survey.thanks_en,
+    })
+    const flash = r.inserted
+      ? `Vraag "${libCode}" gekopieerd uit de bibliotheek naar deze enquête.`
+      : `Vraag "${libCode}" stond al in deze enquête.`
+    return c.redirect(`/admin/surveys/${id}/edit?flash=` + encodeURIComponent(flash))
+  } catch (e: any) {
+    return c.redirect(`/admin/surveys/${id}/edit?error=` + encodeURIComponent(
+      e?.message || 'Kopie uit bibliotheek mislukt.',
+    ))
+  }
+})
+
+// POST — reorder questions of a survey (expects ordered_codes as comma-separated)
+app.post('/admin/surveys/:id/questions/reorder', async (c) => {
+  const guard = await requireAdmin(c)
+  if (guard) return guard
+  const id = parseInt(c.req.param('id'), 10)
+  const survey = await getSurveyById(c.env.DB, id)
+  if (!survey) return c.notFound()
+  const form = await c.req.formData()
+  const ordered = String(form.get('ordered_codes') || '').split(',').map(s => s.trim()).filter(Boolean)
+  if (ordered.length === 0) {
+    return c.redirect(`/admin/surveys/${id}/edit?error=` + encodeURIComponent('Volgorde ontbreekt.'))
+  }
+  await reorderSurveyQuestions(c.env.DB, id, ordered)
+  // sync legacy column
+  const remaining = await listSurveyQuestions(c.env.DB, id)
+  await updateSurvey(c.env.DB, id, {
+    slug: survey.slug, seriesName: survey.series_name, artist: survey.artist,
+    concertDate: survey.concert_date, location: survey.location,
+    titleNl: survey.title_nl, titleEn: survey.title_en,
+    subtitleNl: survey.subtitle_nl, subtitleEn: survey.subtitle_en,
+    questionCodes: remaining.map(q => q.code),
+    status: survey.status, langDefault: survey.lang_default,
+    introNl: survey.intro_nl, introEn: survey.intro_en,
+    thanksNl: survey.thanks_nl, thanksEn: survey.thanks_en,
+  })
+  return c.redirect(`/admin/surveys/${id}/edit?flash=` + encodeURIComponent('Volgorde bijgewerkt.'))
 })
 
 // JSON export of full library — handy as a backup or to copy to another deployment

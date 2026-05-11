@@ -391,17 +391,195 @@ export async function importQuestions(
 }
 
 export async function getQuestionsForSurvey(db: D1Database, survey: Survey): Promise<LibraryQuestion[]> {
-  if (survey.question_codes.length === 0) return []
-  // SQLite IN (?, ?, ...) — keep order via in-memory sort
-  const placeholders = survey.question_codes.map(() => '?').join(',')
-  const r = await db.prepare(`SELECT * FROM questions WHERE code IN (${placeholders})`)
-    .bind(...survey.question_codes).all<LibraryQuestionRow>()
-  const byCode = new Map<string, LibraryQuestion>()
-  for (const row of r.results ?? []) {
-    const q = rowToQuestion(row)
-    byCode.set(q.code, q)
+  // Reads from the per-survey SNAPSHOT (survey_questions), not from the library.
+  // This guarantees that edits to a survey's questions only affect that survey,
+  // and library edits never retroactively affect existing surveys.
+  return listSurveyQuestions(db, survey.id) as unknown as Promise<LibraryQuestion[]>
+}
+
+// ============================================================
+// SURVEY-SCOPED QUESTIONS (snapshot table `survey_questions`)
+// Each survey owns its own immutable copy of question wording / scale / options.
+// Editing a survey's question does NOT touch the library — that's the whole point.
+// ============================================================
+
+export type SurveyQuestion = LibraryQuestion & {
+  survey_id: number
+  display_order: number
+  source_code: string | null   // original library code at snapshot time, NULL if survey-only custom
+  snapshotted_at: string
+}
+
+type SurveyQuestionRow = Omit<SurveyQuestion, 'options_nl' | 'options_en' | 'conditional_on' | 'times_used' | 'last_used_at' | 'created_at'> & {
+  options_nl: string | null
+  options_en: string | null
+  conditional_on: string | null
+}
+
+function rowToSurveyQuestion(r: SurveyQuestionRow): SurveyQuestion {
+  const parseArr = (s: string | null): string[] | null => {
+    if (!s) return null
+    try { const a = JSON.parse(s); return Array.isArray(a) ? a : null } catch { return null }
   }
-  return survey.question_codes.map(c => byCode.get(c)).filter((q): q is LibraryQuestion => Boolean(q))
+  let cond: { field: string; value: string } | null = null
+  try {
+    if (r.conditional_on) {
+      const c = JSON.parse(r.conditional_on)
+      if (c && typeof c === 'object') cond = { field: c.showField ?? c.field, value: c.whenValue ?? c.value }
+    }
+  } catch { cond = null }
+  return {
+    ...r,
+    options_nl: parseArr(r.options_nl),
+    options_en: parseArr(r.options_en),
+    conditional_on: cond,
+    // Library-only fields that views may reference — give safe defaults.
+    times_used: 0,
+    last_used_at: null,
+    created_at: r.snapshotted_at,
+  }
+}
+
+/** All questions for a given survey, in display order. */
+export async function listSurveyQuestions(db: D1Database, surveyId: number): Promise<SurveyQuestion[]> {
+  const r = await db.prepare(
+    `SELECT survey_id, code, display_order, type, category, required, scale_min, scale_max,
+            label_nl, label_en, helper_nl, helper_en,
+            min_label_nl, min_label_en, max_label_nl, max_label_en,
+            options_nl, options_en, conditional_on, source_code, snapshotted_at
+       FROM survey_questions
+      WHERE survey_id = ?
+      ORDER BY display_order, code`,
+  ).bind(surveyId).all<SurveyQuestionRow>()
+  return (r.results ?? []).map(rowToSurveyQuestion)
+}
+
+/** Fetch one survey-scoped question. */
+export async function getSurveyQuestion(
+  db: D1Database, surveyId: number, code: string,
+): Promise<SurveyQuestion | null> {
+  const r = await db.prepare(
+    `SELECT survey_id, code, display_order, type, category, required, scale_min, scale_max,
+            label_nl, label_en, helper_nl, helper_en,
+            min_label_nl, min_label_en, max_label_nl, max_label_en,
+            options_nl, options_en, conditional_on, source_code, snapshotted_at
+       FROM survey_questions
+      WHERE survey_id = ? AND code = ?`,
+  ).bind(surveyId, code).first<SurveyQuestionRow>()
+  return r ? rowToSurveyQuestion(r) : null
+}
+
+/** Snapshot a library question into a survey (idempotent — INSERT OR IGNORE). */
+export async function copyLibraryQuestionToSurvey(
+  db: D1Database, surveyId: number, libraryCode: string, displayOrder?: number,
+): Promise<{ inserted: boolean; code: string }> {
+  const lib = await getLibraryQuestion(db, libraryCode)
+  if (!lib) throw new Error(`Library question "${libraryCode}" not found.`)
+  // If a question with the same code already exists in this survey, skip.
+  const existing = await getSurveyQuestion(db, surveyId, libraryCode)
+  if (existing) return { inserted: false, code: libraryCode }
+
+  // Resolve display_order: append at the end unless explicitly provided.
+  let order = displayOrder
+  if (order == null) {
+    const m = await db.prepare(
+      `SELECT COALESCE(MAX(display_order), -1) + 1 AS next_order FROM survey_questions WHERE survey_id = ?`,
+    ).bind(surveyId).first<{ next_order: number }>()
+    order = m?.next_order ?? 0
+  }
+
+  await db.prepare(
+    `INSERT INTO survey_questions (
+       survey_id, code, display_order, type, category, required, scale_min, scale_max,
+       label_nl, label_en, helper_nl, helper_en,
+       min_label_nl, min_label_en, max_label_nl, max_label_en,
+       options_nl, options_en, conditional_on, source_code, snapshotted_at
+     ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?, datetime('now'))`,
+  ).bind(
+    surveyId, lib.code, order, lib.type, lib.category, lib.required, lib.scale_min, lib.scale_max,
+    lib.label_nl, lib.label_en, lib.helper_nl, lib.helper_en,
+    lib.min_label_nl, lib.min_label_en, lib.max_label_nl, lib.max_label_en,
+    lib.options_nl ? JSON.stringify(lib.options_nl) : null,
+    lib.options_en ? JSON.stringify(lib.options_en) : null,
+    lib.conditional_on ? JSON.stringify(lib.conditional_on) : null,
+    lib.code,  // source_code = original library code
+  ).run()
+  return { inserted: true, code: lib.code }
+}
+
+/** Create a brand-new question directly inside a survey (not from library). */
+export async function createSurveyQuestion(
+  db: D1Database, surveyId: number, input: QuestionInput,
+): Promise<void> {
+  const existing = await getSurveyQuestion(db, surveyId, input.code)
+  if (existing) throw new Error(`Een vraag met code "${input.code}" bestaat al in deze enquête.`)
+
+  const m = await db.prepare(
+    `SELECT COALESCE(MAX(display_order), -1) + 1 AS next_order FROM survey_questions WHERE survey_id = ?`,
+  ).bind(surveyId).first<{ next_order: number }>()
+  const order = m?.next_order ?? 0
+
+  await db.prepare(
+    `INSERT INTO survey_questions (
+       survey_id, code, display_order, type, category, required, scale_min, scale_max,
+       label_nl, label_en, helper_nl, helper_en,
+       min_label_nl, min_label_en, max_label_nl, max_label_en,
+       options_nl, options_en, conditional_on, source_code, snapshotted_at
+     ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?, NULL, datetime('now'))`,
+  ).bind(
+    surveyId, input.code, order, input.type, input.category ?? null,
+    input.required ? 1 : 0, input.scale_min ?? null, input.scale_max ?? null,
+    input.label_nl, input.label_en, input.helper_nl ?? null, input.helper_en ?? null,
+    input.min_label_nl ?? null, input.min_label_en ?? null,
+    input.max_label_nl ?? null, input.max_label_en ?? null,
+    input.options_nl ? JSON.stringify(input.options_nl) : null,
+    input.options_en ? JSON.stringify(input.options_en) : null,
+    input.conditional_on ? JSON.stringify(input.conditional_on) : null,
+  ).run()
+}
+
+/** Update an existing survey-scoped question (everything except code + survey_id). */
+export async function updateSurveyQuestion(
+  db: D1Database, surveyId: number, code: string, input: Omit<QuestionInput, 'code'>,
+): Promise<void> {
+  await db.prepare(
+    `UPDATE survey_questions SET
+       type = ?, category = ?, required = ?, scale_min = ?, scale_max = ?,
+       label_nl = ?, label_en = ?, helper_nl = ?, helper_en = ?,
+       min_label_nl = ?, min_label_en = ?, max_label_nl = ?, max_label_en = ?,
+       options_nl = ?, options_en = ?, conditional_on = ?
+     WHERE survey_id = ? AND code = ?`,
+  ).bind(
+    input.type, input.category ?? null,
+    input.required ? 1 : 0, input.scale_min ?? null, input.scale_max ?? null,
+    input.label_nl, input.label_en, input.helper_nl ?? null, input.helper_en ?? null,
+    input.min_label_nl ?? null, input.min_label_en ?? null,
+    input.max_label_nl ?? null, input.max_label_en ?? null,
+    input.options_nl ? JSON.stringify(input.options_nl) : null,
+    input.options_en ? JSON.stringify(input.options_en) : null,
+    input.conditional_on ? JSON.stringify(input.conditional_on) : null,
+    surveyId, code,
+  ).run()
+}
+
+/** Remove a question from a single survey (does NOT touch the library). */
+export async function deleteSurveyQuestion(
+  db: D1Database, surveyId: number, code: string,
+): Promise<void> {
+  await db.prepare(
+    `DELETE FROM survey_questions WHERE survey_id = ? AND code = ?`,
+  ).bind(surveyId, code).run()
+}
+
+/** Re-order all questions of a survey from a given code list (in desired order). */
+export async function reorderSurveyQuestions(
+  db: D1Database, surveyId: number, orderedCodes: string[],
+): Promise<void> {
+  const stmts = orderedCodes.map((code, idx) =>
+    db.prepare(`UPDATE survey_questions SET display_order = ? WHERE survey_id = ? AND code = ?`)
+      .bind(idx, surveyId, code),
+  )
+  if (stmts.length > 0) await db.batch(stmts)
 }
 
 // ============================================================

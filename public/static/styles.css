@@ -1411,6 +1411,113 @@ body.survey-body { background: #FBF8F2; }
   }
 }
 
+/* ----- Survey-scoped questions list (per-survey snapshot) ----- */
+.survey-questions-section {
+  background: #fafaf7;
+  border: 1px solid #e8e8e3;
+  border-radius: 6px;
+  padding: 18px 20px;
+  margin-top: 28px;
+}
+.add-from-lib-form {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex: 1 1 auto;
+  max-width: 600px;
+}
+.add-from-lib-form select {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 6px 10px;
+  font-size: 13.5px;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+}
+.survey-question-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.survey-question-row {
+  display: grid;
+  grid-template-columns: 28px 110px 1fr auto;
+  align-items: center;
+  gap: 12px;
+  padding: 9px 12px;
+  background: #fff;
+  border: 1px solid #e5e5e0;
+  border-radius: 4px;
+  font-size: 13.5px;
+}
+.survey-question-row:hover {
+  border-color: #c8c8be;
+}
+.sq-order {
+  color: #999;
+  font-variant-numeric: tabular-nums;
+  font-size: 12px;
+  text-align: right;
+}
+.sq-code {
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 12px;
+  color: #777;
+}
+.sq-main {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.sq-label {
+  color: #2d2d2d;
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sq-meta {
+  color: #888;
+  font-size: 11.5px;
+  font-style: italic;
+}
+.sq-actions {
+  display: flex;
+  gap: 4px;
+  flex-shrink: 0;
+}
+.btn-red-text {
+  color: #b03030;
+}
+.btn-red-text:hover {
+  background: #fdf2f2;
+  color: #8a2424;
+}
+.delete-sq-form {
+  display: inline;
+}
+.form-empty {
+  padding: 18px;
+  text-align: center;
+  color: #888;
+  font-style: italic;
+  background: #fff;
+  border: 1px dashed #d4d4ce;
+  border-radius: 4px;
+}
+
+@media (max-width: 720px) {
+  .survey-question-row {
+    grid-template-columns: 28px 1fr auto;
+  }
+  .sq-code { display: none; }
+  .add-from-lib-form {
+    flex-direction: column;
+    align-items: stretch;
+  }
+}
+
 /* ----- Submit row ----- */
 .form-submit-row {
   display: flex;

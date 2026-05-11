@@ -38,6 +38,20 @@
     })
   })
 
+  // ─── 2b. Delete-question-from-survey confirmation ─────────────────────────
+  document.querySelectorAll('form.delete-sq-form').forEach(function (form) {
+    form.addEventListener('submit', function (e) {
+      var row = form.closest('.survey-question-row')
+      var code = row ? (row.getAttribute('data-code') || 'deze vraag') : 'deze vraag'
+      if (!window.confirm(
+        'Vraag "' + code + '" verwijderen uit deze enquête?\n\n' +
+        'Dit raakt alleen DEZE enquête. De bibliotheek-vraag (indien aanwezig) blijft bestaan.',
+      )) {
+        e.preventDefault()
+      }
+    })
+  })
+
   // ─── 3. Delete confirmation ──────────────────────────────────────────────
   // Edit page: single delete form with id="deleteSurveyForm"
   var editDeleteForm = document.getElementById('deleteSurveyForm')
