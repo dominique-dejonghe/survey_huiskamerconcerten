@@ -555,6 +555,7 @@ export const NewSurveyPage: FC<{
             <div class="form-actions-inline">
               <span class="form-hint">Selecteer minstens één vraag uit de bibliotheek (geselecteerde: <strong id="qCount">0</strong>).</span>
               <span class="spacer"></span>
+              <a href="/admin/questions/new" target="_blank" rel="noopener" class="btn btn-ghost btn-small" title="Nieuwe vraag toevoegen aan de bibliotheek (opent nieuw tabblad)">+ Nieuwe vraag</a>
               <button type="button" class="btn btn-ghost btn-small" id="qSelectAll">Alles aan</button>
               <button type="button" class="btn btn-ghost btn-small" id="qSelectNone">Alles uit</button>
               {surveys.length > 0 ? (
@@ -566,18 +567,27 @@ export const NewSurveyPage: FC<{
                 </select>
               ) : null}
             </div>
+            <p class="form-helper" style="margin-top:-4px;">
+              Vragen bewerken of toevoegen aan de bibliotheek opent een nieuw tabblad. Sla daarna eerst je vraag op,
+              kom hier terug en <strong>herlaad de pagina</strong> om de bijgewerkte bibliotheek te zien.
+            </p>
 
             {groups.map(({ category, items }) => (
               <div class="question-group">
                 <h3 class="question-group-title">{CATEGORY_LABELS[category] ?? category}</h3>
                 <div class="question-list">
                   {items.map(q => (
-                    <label class="question-item">
-                      <input type="checkbox" name="question_codes" value={q.code} class="q-check" />
-                      <span class="q-code">{q.code}</span>
-                      <span class="q-text">{q.label_nl}</span>
-                      <span class="q-type">{q.type}{q.required ? ' · verplicht' : ''}</span>
-                    </label>
+                    <div class="question-item-row">
+                      <label class="question-item">
+                        <input type="checkbox" name="question_codes" value={q.code} class="q-check" />
+                        <span class="q-code">{q.code}</span>
+                        <span class="q-text">{q.label_nl}</span>
+                        <span class="q-type">{q.type}{q.required ? ' · verplicht' : ''}</span>
+                      </label>
+                      <a href={`/admin/questions/${q.code}/edit`} target="_blank" rel="noopener"
+                         class="btn btn-ghost btn-tiny q-edit-link" title={`Bewerk "${q.code}" in nieuw tabblad`}
+                         aria-label={`Bewerk vraag ${q.code}`}>✏️ Bewerk</a>
+                    </div>
                   ))}
                 </div>
               </div>
@@ -744,9 +754,14 @@ export const EditSurveyPage: FC<{
             <div class="form-actions-inline">
               <span class="form-hint">Voeg vragen toe of haal ze weg (geselecteerde: <strong id="qCount">{survey.question_codes.length}</strong>).</span>
               <span class="spacer"></span>
+              <a href="/admin/questions/new" target="_blank" rel="noopener" class="btn btn-ghost btn-small" title="Nieuwe vraag toevoegen aan de bibliotheek (opent nieuw tabblad)">+ Nieuwe vraag</a>
               <button type="button" class="btn btn-ghost btn-small" id="qSelectAll">Alles aan</button>
               <button type="button" class="btn btn-ghost btn-small" id="qSelectNone">Alles uit</button>
             </div>
+            <p class="form-helper" style="margin-top:-4px;">
+              Vragen bewerken of toevoegen aan de bibliotheek opent een nieuw tabblad. Sla daarna eerst je vraag op,
+              kom hier terug en <strong>herlaad de pagina</strong> om de bijgewerkte bibliotheek te zien.
+            </p>
 
             {groups.map(({ category, items }) => (
               <div class="question-group">
@@ -755,12 +770,17 @@ export const EditSurveyPage: FC<{
                   {items.map(q => {
                     const checkedAttr = selectedSet.has(q.code) ? { checked: true } : {}
                     return (
-                      <label class="question-item">
-                        <input type="checkbox" name="question_codes" value={q.code} class="q-check" {...checkedAttr} />
-                        <span class="q-code">{q.code}</span>
-                        <span class="q-text">{q.label_nl}</span>
-                        <span class="q-type">{q.type}{q.required ? ' · verplicht' : ''}</span>
-                      </label>
+                      <div class="question-item-row">
+                        <label class="question-item">
+                          <input type="checkbox" name="question_codes" value={q.code} class="q-check" {...checkedAttr} />
+                          <span class="q-code">{q.code}</span>
+                          <span class="q-text">{q.label_nl}</span>
+                          <span class="q-type">{q.type}{q.required ? ' · verplicht' : ''}</span>
+                        </label>
+                        <a href={`/admin/questions/${q.code}/edit`} target="_blank" rel="noopener"
+                           class="btn btn-ghost btn-tiny q-edit-link" title={`Bewerk "${q.code}" in nieuw tabblad`}
+                           aria-label={`Bewerk vraag ${q.code}`}>✏️ Bewerk</a>
+                      </div>
                     )
                   })}
                 </div>
