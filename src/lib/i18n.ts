@@ -17,7 +17,6 @@ export const UI = {
     navAyako: 'Ayako',
     menuLabel: 'Menu',
     // Hero
-    badge: 'Reeks I — afgesloten',
     heroTitle: 'Jouw stem telt',
     heroSub: 'Een korte vragenlijst over de huiskamerconcerten met Jos van Immerseel en Ayako Ito. Jouw eerlijke feedback helpt ons om Reeks II beter te maken.',
     // Progress
@@ -79,7 +78,6 @@ export const UI = {
     navAyako: 'Ayako',
     menuLabel: 'Menu',
     // Hero
-    badge: 'Series I — closed',
     heroTitle: 'Your voice matters',
     heroSub: 'A short questionnaire about the house concerts with Jos van Immerseel and Ayako Ito. Your honest feedback helps us make Series II even better.',
     // Progress

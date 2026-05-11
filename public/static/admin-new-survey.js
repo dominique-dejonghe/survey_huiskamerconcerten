@@ -223,4 +223,19 @@
       submitBtn.textContent = isEditMode ? 'Opslaan…' : 'Aanmaken…';
     });
   }
+
+  // ----- Live char-count for intro/thanks textareas -----
+  document.querySelectorAll('.char-count[data-target]').forEach(function (el) {
+    var targetId = el.getAttribute('data-target');
+    var ta = document.getElementById(targetId);
+    if (!ta) return;
+    var max = parseInt(ta.getAttribute('maxLength') || ta.getAttribute('maxlength') || '1000', 10);
+    function update() {
+      var n = ta.value.length;
+      el.textContent = n + ' / ' + max;
+      el.classList.toggle('char-count-warn', n > max * 0.9);
+    }
+    ta.addEventListener('input', update);
+    update();
+  });
 })();

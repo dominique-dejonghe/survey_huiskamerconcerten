@@ -54,10 +54,8 @@ const Hero: FC<{ lang: Lang; brand?: Brand | null; survey?: Survey | null }> = (
   const subtitle = survey
     ? ((lang === 'en' ? survey.subtitle_en : survey.subtitle_nl) ?? t.heroSub)
     : t.heroSub
-  const badge = survey?.series_name ?? t.badge
   return (
     <section class="hero">
-      <span class="badge badge-red italic-serif">{badge}</span>
       <h1>{title}</h1>
       <p class="subtitle">{subtitle}</p>
     </section>

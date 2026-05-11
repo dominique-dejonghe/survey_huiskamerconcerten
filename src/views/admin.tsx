@@ -506,6 +506,31 @@ export const NewSurveyPage: FC<{
                   <option value="en">Engels</option>
                 </select>
               </div>
+
+              <div class="form-field full">
+                <label for="intro_nl">Inleiding (NL)</label>
+                <textarea id="intro_nl" name="intro_nl" rows={4} maxLength={1000}
+                  placeholder="bv. Dank je dat je een paar minuten neemt voor deze korte vragenlijst…"></textarea>
+                <small class="form-helper char-count" data-target="intro_nl">0 / 1000</small>
+              </div>
+              <div class="form-field full">
+                <label for="intro_en">Inleiding (EN)</label>
+                <textarea id="intro_en" name="intro_en" rows={4} maxLength={1000}
+                  placeholder="e.g. Thanks for taking a few minutes to share your thoughts…"></textarea>
+                <small class="form-helper char-count" data-target="intro_en">0 / 1000</small>
+              </div>
+              <div class="form-field full">
+                <label for="thanks_nl">Bedankboodschap (NL)</label>
+                <textarea id="thanks_nl" name="thanks_nl" rows={4} maxLength={1000}
+                  placeholder="bv. Dank voor je tijd. We zien je graag terug op het volgende concert…"></textarea>
+                <small class="form-helper char-count" data-target="thanks_nl">0 / 1000</small>
+              </div>
+              <div class="form-field full">
+                <label for="thanks_en">Bedankboodschap (EN)</label>
+                <textarea id="thanks_en" name="thanks_en" rows={4} maxLength={1000}
+                  placeholder="e.g. Thanks for your time. We hope to see you at the next concert…"></textarea>
+                <small class="form-helper char-count" data-target="thanks_en">0 / 1000</small>
+              </div>
             </div>
           </section>
 
