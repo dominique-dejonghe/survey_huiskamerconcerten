@@ -1714,3 +1714,96 @@ input[readonly] {
   cursor: not-allowed;
   opacity: 0.7;
 }
+
+/* ============================================================
+   Survey CRUD — overview cards + edit-page danger zone
+   ============================================================ */
+
+/* The card is now a <div>; the upper part is a clickable wrapper <a> */
+.survey-card-clickable {
+  display: block;
+  color: inherit;
+  text-decoration: none;
+  cursor: pointer;
+}
+.survey-card-clickable:hover { background: rgba(0,0,0,0.02); }
+
+/* Bottom action strip — replaces the old single CTA. */
+.survey-card .survey-card-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 14px;
+  border-top: 1px solid #eee;
+  background: #fafafa;
+  flex-wrap: wrap;
+}
+.survey-card .survey-card-actions .survey-card-link {
+  font-size: 12px;
+  color: #777;
+  text-decoration: none;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 55%;
+}
+.survey-card .survey-card-actions .survey-card-link:hover { color: var(--brand-primary, #5B1F2A); }
+.survey-card .survey-card-actions .spacer { flex: 1; }
+
+.inline-form { display: inline-block; margin: 0; padding: 0; }
+.inline-form button { cursor: pointer; }
+
+/* Disabled-looking delete button (still clickable so JS can intercept and show
+   a useful message instead of silently doing nothing). */
+.btn-disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.btn-disabled:hover { background: transparent; }
+
+/* Danger hover only on trash icon when actually deletable. */
+.btn-danger-hover:hover {
+  background: #fdecea;
+  color: #b71c1c;
+}
+
+/* Danger zone at the bottom of the edit page. */
+.danger-zone {
+  margin-top: 32px;
+  border: 1px solid #f3d6d6;
+  background: #fffafa;
+  border-radius: 8px;
+}
+.danger-zone h2 { color: #9a2c2c; margin-top: 0; }
+.danger-zone-actions {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-top: 12px;
+}
+.danger-zone-actions .btn-red {
+  background: #c0392b;
+  color: #fff;
+}
+.danger-zone-actions .btn-red:hover { background: #a93226; }
+
+/* Char counter under intro/thanks textareas. */
+.char-count {
+  display: block;
+  margin-top: 4px;
+  color: #999;
+  font-size: 12px;
+  text-align: right;
+}
+.char-count.char-count-warn { color: #d97706; font-weight: 600; }
+
+/* Flash banner (success) — shared with question CRUD already, but if missing add it. */
+.form-flash {
+  background: #e8f5e9;
+  border: 1px solid #b2dfb6;
+  color: #1b5e20;
+  padding: 10px 14px;
+  border-radius: 6px;
+  margin-bottom: 16px;
+}
+.form-flash strong { font-size: 16px; margin-right: 6px; }

@@ -33,6 +33,8 @@ Brand kleuren worden via CSS custom properties (`--brand-primary`, `--brand-acce
 | **Nieuwe enquête aanmaken** | https://huiskamerconcerten-survey.pages.dev/admin/surveys/new |
 | **Per-survey dashboard** | https://huiskamerconcerten-survey.pages.dev/admin/surveys/1 |
 | **Enquête bewerken** | https://huiskamerconcerten-survey.pages.dev/admin/surveys/1/edit |
+| **Enquête dupliceren** | POST `/admin/surveys/:id/duplicate` (knop op overview + edit) |
+| **Enquête verwijderen** | POST `/admin/surveys/:id/delete` (guard: blokkeert bij actieve responses) |
 | **Vragenbibliotheek (CRUD)** | https://huiskamerconcerten-survey.pages.dev/admin/questions |
 | **Nieuwe vraag aanmaken** | https://huiskamerconcerten-survey.pages.dev/admin/questions/new |
 | **Vraag bewerken** | https://huiskamerconcerten-survey.pages.dev/admin/questions/q1_nps/edit |
@@ -164,7 +166,8 @@ npx wrangler d1 execute huiskamerconcerten-prod --remote --command="INSERT INTO 
 ✅ **Audit log** — alle admin acties (login, delete, export, AI generate)
 ✅ **Migration toegepast lokaal + productie** — 6 migrations, brands, surveys, questions tabellen
 ✅ **Admin form: nieuwe enquête aanmaken** — `/admin/surveys/new` met brand-keuze, auto-slug, live availability-check, question picker met "kopieer van bestaande"
-✅ **Admin form: bestaande enquête bewerken** — `/admin/surveys/:id/edit` past titel, ondertitel, vragen, status, slug, datums aan; brand staat vast (zou bestaande URLs/responses breken). Slug-wijziging werkt maar oude links stoppen.
+✅ **Admin form: bestaande enquête bewerken** — `/admin/surveys/:id/edit` past titel, ondertitel, **inleiding (NL/EN)**, **bedankboodschap (NL/EN)**, vragen, status, slug, datums aan; brand staat vast (zou bestaande URLs/responses breken). Slug-wijziging werkt maar oude links stoppen. Live char-count op intro/thanks-velden (max 1000 tekens).
+✅ **Volledige Enquête-CRUD** — naast bewerken óók **dupliceren** (📋-knop, kopieert alle velden + vragen + intro/thanks, nieuwe slug `-kopie`, status `closed` om accidentele submits te voorkomen) en **verwijderen** (🗑-knop, alleen mogelijk zonder actieve responses — anders nette error met advies om te archiveren). Knoppen op zowel de overview-cards als de danger-zone onderaan de edit-pagina. Server-side guard via `getResponseCountForSurvey` plus client-side `confirm()` dialog.
 ✅ **Deel-knop op dashboard** — modal met directe URL (kopieer-naar-klembord), WhatsApp-link (`wa.me/?text=...`), e-mail (`mailto:...`), én een QR-code (via api.qrserver.com) voor flyers/schermen
 ✅ **Success flash banner** — groene "✓ Wijzigingen opgeslagen" / "Enquête aangemaakt" notice bij redirect
 ✅ **Vragenbibliotheek CRUD** — `/admin/questions` toont alle vragen gegroepeerd per categorie met live filter, type-pills, en gebruiks-info per vraag. Knoppen voor **+ Nieuwe vraag**, **Bewerken**, **Verwijderen** (met usage-guard: een vraag die nog in een enquête zit kan niet verwijderd worden — meldt welke surveys hem gebruiken). Edit-form heeft type-aware secties (NPS/scale toont schaal-instellingen, choice toont opties-editor, tekst/paragraaf verbergt beide). De `code` is read-only na aanmaken (PRIMARY KEY immutability). Voorwaardelijke weergave (`conditional_on`) editbaar via JSON-textarea.

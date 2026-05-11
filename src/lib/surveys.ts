@@ -587,3 +587,74 @@ export async function updateSurvey(
     surveyId,
   ).run()
 }
+
+// ============================================================
+// DELETE + DUPLICATE SURVEY
+// ============================================================
+
+/**
+ * Count non-soft-deleted responses for a survey.
+ * Used to decide whether deletion should be blocked (and the user
+ * advised to archive instead) or allowed.
+ */
+export async function getResponseCountForSurvey(
+  db: D1Database, surveyId: number,
+): Promise<number> {
+  const r = await db.prepare(
+    'SELECT COUNT(*) AS n FROM responses WHERE survey_id = ? AND deleted_at IS NULL',
+  ).bind(surveyId).first<{ n: number }>()
+  return Number(r?.n ?? 0)
+}
+
+/**
+ * Hard-delete a survey. Caller MUST first check getResponseCountForSurvey() — if
+ * there are still live responses, refuse and tell the admin to archive instead.
+ * We also soft-deleted-tombstone any orphan responses (they were already
+ * `deleted_at`-marked, but their survey_id is now dangling so we drop them too,
+ * keeping the audit log intact via the separate audit_log table).
+ */
+export async function deleteSurvey(
+  db: D1Database, surveyId: number,
+): Promise<void> {
+  // Hard-delete any soft-deleted responses for this survey (they're already gone
+  // from public view; this just reclaims DB space).
+  await db.prepare(
+    'DELETE FROM responses WHERE survey_id = ? AND deleted_at IS NOT NULL',
+  ).bind(surveyId).run()
+  // Then the survey itself.
+  await db.prepare('DELETE FROM surveys WHERE id = ?').bind(surveyId).run()
+}
+
+/**
+ * Duplicate a survey: copies all fields, generates a fresh "<slug>-kopie"
+ * unique slug, resets status to "closed" (so the new copy isn't accidentally
+ * collecting responses before the admin has reviewed it).
+ * Returns the new id + slug.
+ */
+export async function duplicateSurvey(
+  db: D1Database, sourceId: number,
+): Promise<{ id: number; slug: string }> {
+  const source = await getSurveyById(db, sourceId)
+  if (!source) throw new Error(`Survey ${sourceId} not found`)
+  const baseSlug = `${source.slug}-kopie`
+  const slug = await generateUniqueSlugForUpdate(db, source.brand_id, -1, baseSlug)
+  return await createSurvey(db, {
+    brandId: source.brand_id,
+    slug,
+    seriesName: source.series_name,
+    artist: source.artist,
+    concertDate: source.concert_date,
+    location: source.location,
+    titleNl: `${source.title_nl} (kopie)`,
+    titleEn: source.title_en ? `${source.title_en} (copy)` : null,
+    subtitleNl: source.subtitle_nl,
+    subtitleEn: source.subtitle_en,
+    status: 'closed', // start the copy closed — admin can flip to "open" after review
+    langDefault: source.lang_default,
+    questionCodes: source.question_codes,
+    introNl: source.intro_nl,
+    introEn: source.intro_en,
+    thanksNl: source.thanks_nl,
+    thanksEn: source.thanks_en,
+  })
+}

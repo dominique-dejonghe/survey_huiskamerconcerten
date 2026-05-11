@@ -31,6 +31,7 @@ import {
   getBrandByPrefix, getSurveyBySlug, getSurveyById, getBrand,
   listLibraryQuestions, createSurvey, slugify, generateUniqueSlug,
   updateSurvey, generateUniqueSlugForUpdate,
+  deleteSurvey, duplicateSurvey, getResponseCountForSurvey,
   getLibraryQuestion, createQuestion, updateQuestion, deleteQuestion,
   validateQuestionInput, getSurveysUsingQuestion, importQuestions,
   type QuestionInput,
@@ -250,7 +251,8 @@ app.get('/admin', async (c) => {
   if (guard) return guard
   const surveys = await listSurveysWithStats(c.env.DB, { status: 'all' })
   const brands = await listBrands(c.env.DB)
-  return c.html(<AdminOverviewPage surveys={surveys} brands={brands} />)
+  return c.html(<AdminOverviewPage surveys={surveys} brands={brands}
+    flash={c.req.query('flash') || ''} error={c.req.query('error') || ''} />)
 })
 
 // New-survey form (must come BEFORE /:id to avoid 'new' being parsed as id)
@@ -300,6 +302,10 @@ app.post('/admin/surveys', async (c) => {
   const location = get('location')
   const subtitleNl = get('subtitle_nl')
   const subtitleEn = get('subtitle_en')
+  const introNl = get('intro_nl')
+  const introEn = get('intro_en')
+  const thanksNl = get('thanks_nl')
+  const thanksEn = get('thanks_en')
   const status = (get('status') || 'open') as 'open' | 'closed' | 'archived'
   const langDefault = (get('lang_default') || 'nl') as 'nl' | 'en'
   const codes = getAll('question_codes')
@@ -352,6 +358,10 @@ app.post('/admin/surveys', async (c) => {
     titleEn: titleEn || titleNl,
     subtitleNl: subtitleNl || null,
     subtitleEn: subtitleEn || null,
+    introNl: introNl || null,
+    introEn: introEn || null,
+    thanksNl: thanksNl || null,
+    thanksEn: thanksEn || null,
     questionCodes: codes,
     status,
     langDefault,
@@ -389,8 +399,10 @@ app.get('/admin/surveys/:id/edit', async (c) => {
   const brands = await listBrands(c.env.DB)
   const questions = await listLibraryQuestions(c.env.DB)
   const error = c.req.query('error') || ''
+  const flash = c.req.query('flash') || ''
   return c.html(
-    <EditSurveyPage survey={survey} brands={brands} questions={questions} error={error} />,
+    <EditSurveyPage survey={survey} brands={brands} questions={questions}
+      error={error} flash={flash} />,
   )
 })
 
@@ -419,6 +431,10 @@ app.post('/admin/surveys/:id', async (c) => {
   const location = get('location')
   const subtitleNl = get('subtitle_nl')
   const subtitleEn = get('subtitle_en')
+  const introNl = get('intro_nl')
+  const introEn = get('intro_en')
+  const thanksNl = get('thanks_nl')
+  const thanksEn = get('thanks_en')
   const status = (get('status') || existing.status) as 'open' | 'closed' | 'archived'
   const langDefault = (get('lang_default') || existing.lang_default) as 'nl' | 'en'
   const codes = getAll('question_codes')
@@ -465,6 +481,10 @@ app.post('/admin/surveys/:id', async (c) => {
     questionCodes: codes,
     status,
     langDefault,
+    introNl: introNl || null,
+    introEn: introEn || null,
+    thanksNl: thanksNl || null,
+    thanksEn: thanksEn || null,
   })
 
   const ip = getClientIp(c)
@@ -474,6 +494,62 @@ app.post('/admin/surveys/:id', async (c) => {
   })
 
   return c.redirect(`/admin/surveys/${id}?updated=1`)
+})
+
+// ───── Delete survey (with response guard) ─────
+app.post('/admin/surveys/:id/delete', async (c) => {
+  const guard = await requireAdmin(c)
+  if (guard) return guard
+  const id = parseInt(c.req.param('id'), 10)
+  if (!Number.isFinite(id) || id <= 0) {
+    return c.redirect('/admin?error=' + encodeURIComponent('Ongeldige enquête-id.'))
+  }
+  const existing = await getSurveyById(c.env.DB, id)
+  if (!existing) {
+    return c.redirect('/admin?error=' + encodeURIComponent('Enquête bestaat niet (meer).'))
+  }
+  // Hard guard: refuse to delete if there are still live responses.
+  // The admin should archive instead — that's a one-click status change.
+  const count = await getResponseCountForSurvey(c.env.DB, id)
+  if (count > 0) {
+    return c.redirect(`/admin/surveys/${id}/edit?error=` + encodeURIComponent(
+      `Deze enquête heeft nog ${count} actieve reactie${count === 1 ? '' : 's'}. ` +
+      `Verwijderen is niet mogelijk. Zet de status op "archived" als je 'm wilt verbergen, ` +
+      `of wis eerst de reacties via het dashboard.`,
+    ))
+  }
+  await deleteSurvey(c.env.DB, id)
+  const ip = getClientIp(c)
+  const ipHash = await hashIp(ip, c.env.IP_HASH_SALT || 'dev')
+  await logAudit(c.env.DB, 'survey_delete', ipHash, {
+    surveyId: id, slug: existing.slug, brand: existing.brand_id,
+  })
+  return c.redirect('/admin?flash=' + encodeURIComponent(
+    `Enquête "${existing.title_nl}" verwijderd.`,
+  ))
+})
+
+// ───── Duplicate survey (handy as a starting point for next concert) ─────
+app.post('/admin/surveys/:id/duplicate', async (c) => {
+  const guard = await requireAdmin(c)
+  if (guard) return guard
+  const id = parseInt(c.req.param('id'), 10)
+  if (!Number.isFinite(id) || id <= 0) {
+    return c.redirect('/admin?error=' + encodeURIComponent('Ongeldige enquête-id.'))
+  }
+  const existing = await getSurveyById(c.env.DB, id)
+  if (!existing) {
+    return c.redirect('/admin?error=' + encodeURIComponent('Enquête bestaat niet (meer).'))
+  }
+  const copy = await duplicateSurvey(c.env.DB, id)
+  const ip = getClientIp(c)
+  const ipHash = await hashIp(ip, c.env.IP_HASH_SALT || 'dev')
+  await logAudit(c.env.DB, 'survey_duplicate', ipHash, {
+    sourceId: id, newId: copy.id, newSlug: copy.slug,
+  })
+  return c.redirect(`/admin/surveys/${copy.id}/edit?flash=` + encodeURIComponent(
+    `Kopie aangemaakt van "${existing.title_nl}". Pas de details aan en zet de status op "open" als je klaar bent.`,
+  ))
 })
 
 // ============================================================

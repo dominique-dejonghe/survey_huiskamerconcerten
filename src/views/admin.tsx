@@ -66,7 +66,9 @@ function npsClass(nps: number | null): string {
 export const AdminOverviewPage: FC<{
   surveys: ListSurveysWithStatsRow[]
   brands: Brand[]
-}> = ({ surveys, brands }) => {
+  flash?: string
+  error?: string
+}> = ({ surveys, brands, flash, error }) => {
   const open = surveys.filter(s => s.status === 'open')
   const closed = surveys.filter(s => s.status !== 'open')
   return (
@@ -78,6 +80,16 @@ export const AdminOverviewPage: FC<{
         <a href="/admin/logout" class="btn btn-ghost">Uitloggen</a>
       </header>
       <main class="admin-main">
+        {flash ? (
+          <div class="form-flash" role="status" id="flashBanner">
+            <strong>✓</strong> {flash}
+          </div>
+        ) : null}
+        {error ? (
+          <div class="form-error" role="alert">
+            <strong>Fout:</strong> {error}
+          </div>
+        ) : null}
         <section class="admin-section overview-hero">
           <h2 style="margin-top:0;">Overzicht enquêtes</h2>
           <p style="color:#555;">
@@ -122,44 +134,63 @@ export const AdminOverviewPage: FC<{
           </div>
         </section>
       </main>
+      <script src={v('/static/admin-survey-edit.js')} defer></script>
     </Layout>
   )
 }
 
 const SurveyCard: FC<{ s: ListSurveysWithStatsRow }> = ({ s }) => {
   const url = `/admin/surveys/${s.id}`
+  const editUrl = `/admin/surveys/${s.id}/edit`
   const publicUrl = `/${s.brand_id === 'huiskamer' ? 'h' : s.brand_id === 'ebdiep' ? 'e' : 'h'}/${s.slug}`
+  // Card is a <div> instead of <a> so we can nest forms (duplicate / delete) inside.
+  // The whole card stays clickable via a wrapper link around the upper info block.
   return (
-    <a class="survey-card" href={url} style={`--brand-primary:${s.brand_primary_color};--brand-accent:${s.brand_accent_color};`}>
-      <div class="survey-card-header">
-        {s.brand_logo_url ? <img src={s.brand_logo_url} alt={s.brand_name_nl} class="survey-card-logo" /> : null}
-        <div>
-          <span class="survey-card-brand italic-serif">{s.brand_name_nl}</span>
-          {s.series_name ? <span class="survey-card-series"> · {s.series_name}</span> : null}
+    <div class="survey-card" style={`--brand-primary:${s.brand_primary_color};--brand-accent:${s.brand_accent_color};`}>
+      <a class="survey-card-clickable" href={url}>
+        <div class="survey-card-header">
+          {s.brand_logo_url ? <img src={s.brand_logo_url} alt={s.brand_name_nl} class="survey-card-logo" /> : null}
+          <div>
+            <span class="survey-card-brand italic-serif">{s.brand_name_nl}</span>
+            {s.series_name ? <span class="survey-card-series"> · {s.series_name}</span> : null}
+          </div>
+          <span class={`status-pill status-${s.status}`}>{s.status}</span>
         </div>
-        <span class={`status-pill status-${s.status}`}>{s.status}</span>
-      </div>
-      <h3>{s.title_nl}</h3>
-      {s.subtitle_nl ? <p class="survey-card-sub">{s.subtitle_nl}</p> : null}
-      <div class="survey-card-stats">
-        <div class="stat">
-          <span class="stat-num">{s.response_count}</span>
-          <span class="stat-label">antwoorden</span>
+        <h3>{s.title_nl}</h3>
+        {s.subtitle_nl ? <p class="survey-card-sub">{s.subtitle_nl}</p> : null}
+        <div class="survey-card-stats">
+          <div class="stat">
+            <span class="stat-num">{s.response_count}</span>
+            <span class="stat-label">antwoorden</span>
+          </div>
+          <div class={`stat ${npsClass(s.avg_nps)}`}>
+            <span class="stat-num">{s.avg_nps == null ? '—' : Math.round(s.avg_nps * 10) / 10}</span>
+            <span class="stat-label">⌀ NPS</span>
+          </div>
+          <div class="stat">
+            <span class="stat-num small">{fmtDateShort(s.last_response_at)}</span>
+            <span class="stat-label">laatste</span>
+          </div>
         </div>
-        <div class={`stat ${npsClass(s.avg_nps)}`}>
-          <span class="stat-num">{s.avg_nps == null ? '—' : Math.round(s.avg_nps * 10) / 10}</span>
-          <span class="stat-label">⌀ NPS</span>
-        </div>
-        <div class="stat">
-          <span class="stat-num small">{fmtDateShort(s.last_response_at)}</span>
-          <span class="stat-label">laatste</span>
-        </div>
-      </div>
+      </a>
       <div class="survey-card-actions">
-        <span class="survey-card-cta">Open dashboard →</span>
-        <a class="survey-card-link" href={publicUrl} onclick="event.stopPropagation();" target="_blank" rel="noopener">{publicUrl}</a>
+        <a class="survey-card-link" href={publicUrl} target="_blank" rel="noopener">{publicUrl}</a>
+        <span class="spacer"></span>
+        <a href={editUrl} class="btn btn-ghost btn-small" title="Bewerken">⚙ Bewerken</a>
+        <form method="post" action={`/admin/surveys/${s.id}/duplicate`} class="inline-form">
+          <button type="submit" class="btn btn-ghost btn-small" title="Duplicaat maken">📋</button>
+        </form>
+        <form method="post" action={`/admin/surveys/${s.id}/delete`} class="inline-form survey-delete-form"
+          data-title={s.title_nl} data-responses={String(s.response_count)}>
+          <button type="submit" class={`btn btn-ghost btn-small ${s.response_count > 0 ? 'btn-disabled' : 'btn-danger-hover'}`}
+            title={s.response_count > 0
+              ? `Niet verwijderbaar — ${s.response_count} reactie(s). Archiveer in plaats daarvan.`
+              : 'Verwijderen'}>
+            🗑
+          </button>
+        </form>
       </div>
-    </a>
+    </div>
   )
 }
 
@@ -552,7 +583,8 @@ export const EditSurveyPage: FC<{
   brands: Brand[]
   questions: LibraryQuestion[]
   error?: string
-}> = ({ survey, brands, questions, error }) => {
+  flash?: string
+}> = ({ survey, brands, questions, error, flash }) => {
   const groups = groupQuestions(questions)
   const brand = brands.find(b => b.id === survey.brand_id)
   const selectedSet = new Set(survey.question_codes)
@@ -568,6 +600,11 @@ export const EditSurveyPage: FC<{
       </header>
 
       <main class="admin-main new-survey-form" data-mode="edit" data-current-slug={survey.slug} data-survey-id={String(survey.id)} data-brand-prefix={prefix}>
+        {flash ? (
+          <div class="form-flash" role="status" id="flashBanner">
+            <strong>✓</strong> {flash}
+          </div>
+        ) : null}
         {error ? (
           <div class="form-error" role="alert">
             <strong>Niet opgeslagen:</strong> {error}
@@ -706,6 +743,42 @@ export const EditSurveyPage: FC<{
             ))}
           </section>
 
+          {/* ───────── Intro & thanks copy ───────── */}
+          <section class="admin-section">
+            <h2>5. Inleiding & bedankboodschap</h2>
+            <p class="form-hint">
+              Optioneel. De inleiding verschijnt boven de eerste vraag, de bedankboodschap op de "dank je"-pagina ná
+              het indienen. Laat leeg om de standaardteksten te gebruiken. <strong>Tip:</strong> hou het persoonlijk
+              en kort — twee à drie zinnen is genoeg.
+            </p>
+            <div class="form-grid">
+              <div class="form-field">
+                <label for="intro_nl">Inleiding (NL)</label>
+                <textarea id="intro_nl" name="intro_nl" rows={4} maxLength={1000}
+                  placeholder="bv. Dank je dat je een paar minuten neemt voor deze korte vragenlijst…">{survey.intro_nl || ''}</textarea>
+                <small class="form-helper char-count" data-target="intro_nl">0 / 1000</small>
+              </div>
+              <div class="form-field">
+                <label for="intro_en">Inleiding (EN)</label>
+                <textarea id="intro_en" name="intro_en" rows={4} maxLength={1000}
+                  placeholder="e.g. Thanks for taking a few minutes to share your thoughts…">{survey.intro_en || ''}</textarea>
+                <small class="form-helper char-count" data-target="intro_en">0 / 1000</small>
+              </div>
+              <div class="form-field">
+                <label for="thanks_nl">Bedankboodschap (NL)</label>
+                <textarea id="thanks_nl" name="thanks_nl" rows={4} maxLength={1000}
+                  placeholder="bv. Dank voor je tijd. We zien je graag terug op het volgende concert…">{survey.thanks_nl || ''}</textarea>
+                <small class="form-helper char-count" data-target="thanks_nl">0 / 1000</small>
+              </div>
+              <div class="form-field">
+                <label for="thanks_en">Bedankboodschap (EN)</label>
+                <textarea id="thanks_en" name="thanks_en" rows={4} maxLength={1000}
+                  placeholder="e.g. Thanks for your time. We hope to see you at the next concert…">{survey.thanks_en || ''}</textarea>
+                <small class="form-helper char-count" data-target="thanks_en">0 / 1000</small>
+              </div>
+            </div>
+          </section>
+
           {/* ───────── Submit ───────── */}
           <section class="admin-section form-submit-row">
             <a href={`/admin/surveys/${survey.id}`} class="btn btn-ghost">Annuleren</a>
@@ -713,9 +786,33 @@ export const EditSurveyPage: FC<{
             <button type="submit" class="btn btn-teal" id="submitBtn">Wijzigingen opslaan</button>
           </section>
         </form>
+
+        {/* ───────── Danger zone — duplicate / delete (separate mini-forms, OUTSIDE main form) ───────── */}
+        <section class="admin-section danger-zone">
+          <h2>Beheer</h2>
+          <p class="form-hint">
+            Duplicaat: handig als startpunt voor een volgend concert — alles wordt gekopieerd behalve responses, en
+            de kopie staat op <em>closed</em> tot je 'm bewust opent. Verwijderen: alleen mogelijk als er nog géén
+            responses zijn. Heb je wel responses maar wil je 'm verbergen? Zet de status hierboven op <em>archived</em>.
+          </p>
+          <div class="danger-zone-actions">
+            <form method="post" action={`/admin/surveys/${survey.id}/duplicate`} class="inline-form">
+              <button type="submit" class="btn btn-ghost" id="duplicateBtn">
+                📋 Duplicaat maken
+              </button>
+            </form>
+            <form method="post" action={`/admin/surveys/${survey.id}/delete`} class="inline-form"
+              id="deleteSurveyForm">
+              <button type="submit" class="btn btn-red" id="deleteBtn">
+                🗑 Enquête verwijderen
+              </button>
+            </form>
+          </div>
+        </section>
       </main>
 
       <script src={v('/static/admin-new-survey.js')} defer></script>
+      <script src={v('/static/admin-survey-edit.js')} defer></script>
     </Layout>
   )
 }
