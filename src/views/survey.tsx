@@ -1,6 +1,7 @@
 import type { FC } from 'hono/jsx'
 import { Layout } from './layout'
-import { QUESTIONS, type Question } from '../lib/questions'
+import { QUESTIONS, type Question, surveyQuestionsToUi } from '../lib/questions'
+import type { SurveyQuestion } from '../lib/surveys'
 import { UI, SECTIONS_I18N, QUESTIONS_I18N, type Lang } from '../lib/i18n'
 import type { Brand, Survey } from '../lib/surveys'
 import { v } from '../lib/version'
@@ -100,9 +101,13 @@ const IntroCard: FC<{ lang: Lang; brand?: Brand | null; survey?: Survey | null }
   )
 }
 
-const QuestionView: FC<{ q: Question; lang: Lang }> = ({ q, lang }) => {
+const QuestionView: FC<{ q: Question; lang: Lang; useI18nOverride?: boolean }> = ({ q, lang, useI18nOverride = false }) => {
   const t = UI[lang]
-  const i18n = QUESTIONS_I18N[q.id]?.[lang]
+  // When rendering DB-backed snapshot questions, the question text/labels/options
+  // already come in the requested language from the database — never override
+  // with the hardcoded QUESTIONS_I18N table (which was the old single-survey
+  // i18n source and is now intentionally bypassed for snapshot surveys).
+  const i18n = useI18nOverride ? QUESTIONS_I18N[q.id]?.[lang] : undefined
   const text = i18n?.text ?? q.text
   const helper = i18n?.helper ?? q.helper
   const minLabel = (q.type === 'scale' ? (i18n?.minLabel ?? (q as any).minLabel) : undefined) as string | undefined
@@ -198,13 +203,28 @@ const SectionDivider: FC<{ id: string; lang: Lang }> = ({ id, lang }) => {
   )
 }
 
-export const SurveyPage: FC<{ lang?: Lang; brand?: Brand | null; survey?: Survey | null }> = ({ lang = 'nl', brand, survey }) => {
+export const SurveyPage: FC<{
+  lang?: Lang
+  brand?: Brand | null
+  survey?: Survey | null
+  /** Per-survey snapshot questions, the new source of truth. When provided
+   *  we render exclusively from these and bypass the hardcoded QUESTIONS array. */
+  surveyQuestions?: SurveyQuestion[] | null
+}> = ({ lang = 'nl', brand, survey, surveyQuestions }) => {
   const t = UI[lang]
-  // Filter questions to those listed in the survey config (default: all)
-  const wanted = survey?.question_codes ?? null
-  const filtered = wanted
-    ? QUESTIONS.filter(q => wanted.includes(q.id))
-    : QUESTIONS
+  // Build the runtime question list.
+  //  - If snapshot rows were supplied (the normal case from the route handler):
+  //    convert them to UI Question shape in the requested language. The DB is
+  //    the source of truth for wording, scale, options, required flag, etc.
+  //  - Otherwise fall back to the hardcoded QUESTIONS (legacy code paths,
+  //    e.g. server-side rendering without a survey context).
+  const fromSnapshot = Array.isArray(surveyQuestions) && surveyQuestions.length > 0
+  const filtered: Question[] = fromSnapshot
+    ? surveyQuestionsToUi(surveyQuestions!, lang)
+    : (() => {
+        const wanted = survey?.question_codes ?? null
+        return wanted ? QUESTIONS.filter(q => wanted.includes(q.id)) : QUESTIONS
+      })()
   const grouped: Record<string, Question[]> = {}
   for (const q of filtered) {
     if (!grouped[q.section]) grouped[q.section] = []
@@ -254,7 +274,9 @@ export const SurveyPage: FC<{ lang?: Lang; brand?: Brand | null; survey?: Survey
             return (
               <>
                 <SectionDivider id={section.id} lang={lang} />
-                {list.map(q => <QuestionView q={q} lang={lang} />)}
+                {list.map(q => (
+                  <QuestionView q={q} lang={lang} useI18nOverride={!fromSnapshot} />
+                ))}
               </>
             )
           })}

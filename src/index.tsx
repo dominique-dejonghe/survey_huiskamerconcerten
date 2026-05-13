@@ -129,7 +129,13 @@ async function renderSurveyForSlug(c: any, prefix: string, slug: string, lang: L
     // Could render a "closed" page; for now redirect to landing
     return c.redirect(lang === 'en' ? '/en' : '/')
   }
-  return c.html(<SurveyPage lang={lang} brand={brand} survey={survey} />)
+  // Load the survey's OWN questions from the snapshot table — NOT the library.
+  // This is the whole point of the snapshot refactor: each survey lives its
+  // own life, edits to the library never propagate retroactively.
+  const surveyQuestions = await listSurveyQuestions(c.env.DB, survey.id)
+  return c.html(
+    <SurveyPage lang={lang} brand={brand} survey={survey} surveyQuestions={surveyQuestions} />
+  )
 }
 
 app.get('/:prefix{[he]}/:slug', async (c) => {

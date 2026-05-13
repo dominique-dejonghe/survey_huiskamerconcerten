@@ -176,3 +176,98 @@ export const QUESTIONS: Question[] = [
 export const REQUIRED_IDS = QUESTIONS.filter(q => q.required).map(q => q.id)
 export const OPEN_TEXT_IDS = ['q2_blijft_bij','q5_sfeer_open','q7_fortepiano','q9_favoriet','q11_gesprek','q13_catering','q15_wensen_2','q16_gasten','q17_terugkomen','q18_overige']
 export const SCALE_IDS = ['q4_sfeer','q6_akoestiek','q8_repertoire','q10_interactie','q12_communic','q14_bijdrage']
+
+// ────────────────────────────────────────────────────────────────────
+// DB-backed question adapter
+// ────────────────────────────────────────────────────────────────────
+// The hardcoded QUESTIONS / SECTIONS arrays above are only used as a fallback
+// (when no survey is provided to SurveyPage — e.g. the legacy unbranded
+// /survey page that does not yet exist). For real surveys we render from the
+// `survey_questions` snapshot table via this adapter.
+//
+// Note: the snapshot has no `section` column. We map a question's `category`
+// (free-text in admin) onto a known section id by best-effort matching, and
+// fall back to a generic 'algemeen' section so nothing gets dropped from the
+// render.
+
+import type { SurveyQuestion } from './surveys'
+
+/** Map a free-text category (like "Algemene beleving" or "Locatie & sfeer")
+ *  to one of our known SECTIONS ids. Case-insensitive, accent-insensitive,
+ *  substring-based. Falls back to 'algemeen' if nothing matches. */
+function categoryToSectionId(category: string | null): string {
+  if (!category) return 'algemeen'
+  const norm = category.toLowerCase().normalize('NFKD').replace(/[\u0300-\u036f]/g, '')
+  const candidates: Array<{ id: string; keys: string[] }> = [
+    { id: 'algemeen', keys: ['algemeen', 'beleving', 'overall'] },
+    { id: 'locatie', keys: ['locatie', 'sfeer', 'huiskamer', 'restaurant', 'setting'] },
+    { id: 'muzikaal', keys: ['muziek', 'muzikaal', 'instrument', 'akoestiek', 'fortepiano', 'repertoire', 'programma'] },
+    { id: 'jos', keys: ['jos', 'gastheer', 'toelichting', 'interactie'] },
+    { id: 'organisatie', keys: ['organisatie', 'praktisch', 'communicatie', 'catering', 'bijdrage'] },
+    { id: 'reeks2', keys: ['reeks ii', 'reeks 2', 'volgende', 'wensen', 'gasten', 'terugkomen'] },
+    { id: 'totslot', keys: ['totslot', 'tot slot', 'naam', 'contact'] },
+  ]
+  for (const c of candidates) {
+    if (c.keys.some(k => norm.includes(k))) return c.id
+  }
+  return 'algemeen'
+}
+
+/** Convert a DB SurveyQuestion into the UI `Question` shape, picking the
+ *  correct language for text/helper/labels/options. */
+export function surveyQuestionToUi(sq: SurveyQuestion, lang: 'nl' | 'en', number: number): Question {
+  const label = (lang === 'en' ? sq.label_en : sq.label_nl) || sq.label_nl || sq.label_en || sq.code
+  const helper = (lang === 'en' ? sq.helper_en : sq.helper_nl) || undefined
+  const required = sq.required === 1
+  const sectionId = categoryToSectionId(sq.category)
+
+  // DB `nps` type maps to UI `scale` with min/max 0–10
+  if (sq.type === 'nps' || sq.type === 'scale') {
+    return {
+      type: 'scale',
+      id: sq.code,
+      number,
+      required,
+      text: label,
+      helper,
+      min: sq.scale_min ?? (sq.type === 'nps' ? 0 : 1),
+      max: sq.scale_max ?? (sq.type === 'nps' ? 10 : 5),
+      minLabel: (lang === 'en' ? sq.min_label_en : sq.min_label_nl) || undefined,
+      maxLabel: (lang === 'en' ? sq.max_label_en : sq.max_label_nl) || undefined,
+      section: sectionId,
+    }
+  }
+  if (sq.type === 'choice') {
+    const opts = (lang === 'en' ? sq.options_en : sq.options_nl) || sq.options_nl || sq.options_en || []
+    const cond = sq.conditional_on
+      ? { showField: sq.conditional_on.field, whenValue: sq.conditional_on.value }
+      : undefined
+    return {
+      type: 'choice',
+      id: sq.code,
+      number,
+      required,
+      text: label,
+      helper,
+      options: opts,
+      section: sectionId,
+      conditional: cond,
+    }
+  }
+  // text / paragraph
+  return {
+    type: sq.type === 'paragraph' ? 'paragraph' : 'text',
+    id: sq.code,
+    number,
+    required,
+    text: label,
+    helper,
+    section: sectionId,
+  }
+}
+
+/** Build the runtime list of UI Questions from a list of DB snapshots.
+ *  Numbering follows display_order (already sorted by the caller). */
+export function surveyQuestionsToUi(snapshots: SurveyQuestion[], lang: 'nl' | 'en'): Question[] {
+  return snapshots.map((sq, idx) => surveyQuestionToUi(sq, lang, idx + 1))
+}
