@@ -819,10 +819,16 @@ export const EditSurveyPage: FC<{
           <h2>Hoofdstukken in deze enquête</h2>
           <p class="form-hint">
             Hoofdstukken zijn de tussentitels die op de publieke enquête-pagina verschijnen boven
-            groepen vragen — bijvoorbeeld <em>Locatie & sfeer</em> met daaronder <em>De huiskamer als ruimte</em>.
-            Je kan ze hier <strong>per enquête</strong> aanpassen — het wijzigen van een hoofdstuk in
-            deze enquête heeft <strong>geen</strong> invloed op andere enquêtes.
+            groepen vragen. Je kan ze hier <strong>per enquête</strong> aanpassen — wijzigen in deze
+            enquête heeft <strong>geen</strong> invloed op andere enquêtes.
           </p>
+          <div class="section-preview-hint" aria-hidden="true">
+            <div class="section-preview-label">Zo wordt elk hoofdstuk getoond op de publieke pagina:</div>
+            <div class="section-preview-mock">
+              <span class="section-preview-badge">Badge (oranje)</span>
+              <div class="section-preview-heading">Hoofding (groene tekst)</div>
+            </div>
+          </div>
 
           <details class="survey-section-form-wrap" style="margin-bottom:14px;">
             <summary class="btn btn-teal btn-small" style="display:inline-block;">+ Nieuw hoofdstuk toevoegen</summary>
@@ -831,19 +837,20 @@ export const EditSurveyPage: FC<{
               <input type="hidden" name="section_id" value="" />
               <div class="form-grid">
                 <div class="form-field">
-                  <label>Korte titel (badge, NL) *</label>
+                  <label><span class="swatch swatch-orange"></span> Badge (oranje pill, NL) *</label>
                   <input type="text" name="title_nl" required maxlength="60" placeholder="bv. Locatie & sfeer" />
                 </div>
                 <div class="form-field">
-                  <label>Korte titel (badge, EN)</label>
+                  <label><span class="swatch swatch-orange"></span> Badge (oranje pill, EN)</label>
                   <input type="text" name="title_en" maxlength="60" placeholder="e.g. Location & atmosphere" />
                 </div>
                 <div class="form-field full">
-                  <label>Ondertitel / hoofding (NL)</label>
+                  <label><span class="swatch swatch-teal"></span> Hoofding (grote groene tekst, NL)</label>
                   <input type="text" name="subtitle_nl" maxlength="160" placeholder="bv. De huiskamer als ruimte." />
+                  <p class="field-hint-tiny">Laat leeg om enkel de badge te tonen.</p>
                 </div>
                 <div class="form-field full">
-                  <label>Ondertitel / hoofding (EN)</label>
+                  <label><span class="swatch swatch-teal"></span> Hoofding (grote groene tekst, EN)</label>
                   <input type="text" name="subtitle_en" maxlength="160" placeholder="e.g. The living room as a venue." />
                 </div>
               </div>
@@ -873,19 +880,20 @@ export const EditSurveyPage: FC<{
                       <input type="hidden" name="section_id" value={s.section_id} />
                       <div class="form-grid">
                         <div class="form-field">
-                          <label>Korte titel (badge, NL) *</label>
+                          <label><span class="swatch swatch-orange"></span> Badge (oranje pill, NL) *</label>
                           <input type="text" name="title_nl" required maxlength="60" value={s.title_nl} />
                         </div>
                         <div class="form-field">
-                          <label>Korte titel (badge, EN)</label>
+                          <label><span class="swatch swatch-orange"></span> Badge (oranje pill, EN)</label>
                           <input type="text" name="title_en" maxlength="60" value={s.title_en} />
                         </div>
                         <div class="form-field full">
-                          <label>Ondertitel / hoofding (NL)</label>
+                          <label><span class="swatch swatch-teal"></span> Hoofding (grote groene tekst, NL)</label>
                           <input type="text" name="subtitle_nl" maxlength="160" value={s.subtitle_nl || ''} />
+                          <p class="field-hint-tiny">Laat leeg om enkel de badge te tonen.</p>
                         </div>
                         <div class="form-field full">
-                          <label>Ondertitel / hoofding (EN)</label>
+                          <label><span class="swatch swatch-teal"></span> Hoofding (grote groene tekst, EN)</label>
                           <input type="text" name="subtitle_en" maxlength="160" value={s.subtitle_en || ''} />
                         </div>
                       </div>
