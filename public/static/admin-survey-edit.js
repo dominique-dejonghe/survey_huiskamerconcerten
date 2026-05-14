@@ -52,6 +52,21 @@
     })
   })
 
+  // ─── 2c. Delete-section-from-survey confirmation ──────────────────────────
+  document.querySelectorAll('form.delete-ss-form').forEach(function (form) {
+    form.addEventListener('submit', function (e) {
+      var row = form.closest('.survey-section-row')
+      var sid = row ? (row.getAttribute('data-section-id') || 'dit hoofdstuk') : 'dit hoofdstuk'
+      if (!window.confirm(
+        'Hoofdstuk "' + sid + '" verwijderen uit deze enquête?\n\n' +
+        'Vragen die aan dit hoofdstuk hingen blijven bestaan — ze vallen dan onder "Algemeen".\n' +
+        'Andere enquêtes worden NIET beïnvloed.',
+      )) {
+        e.preventDefault()
+      }
+    })
+  })
+
   // ─── 3. Delete confirmation ──────────────────────────────────────────────
   // Edit page: single delete form with id="deleteSurveyForm"
   var editDeleteForm = document.getElementById('deleteSurveyForm')

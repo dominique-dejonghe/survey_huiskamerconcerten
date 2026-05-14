@@ -1,6 +1,6 @@
 import type { FC } from 'hono/jsx'
 import { Layout } from './layout'
-import type { Brand, Survey, LibraryQuestion, SurveyQuestion } from '../lib/surveys'
+import type { Brand, Survey, LibraryQuestion, SurveyQuestion, SurveySection } from '../lib/surveys'
 import type { ListSurveysWithStatsRow } from '../lib/surveys'
 import { v } from '../lib/version'
 
@@ -620,9 +620,11 @@ export const EditSurveyPage: FC<{
   libraryQuestions: LibraryQuestion[]
   /** This survey's own snapshot — independent from the library. */
   surveyQuestions: SurveyQuestion[]
+  /** This survey's own section dividers — independent per-survey. */
+  surveySections: SurveySection[]
   error?: string
   flash?: string
-}> = ({ survey, brands, libraryQuestions, surveyQuestions, error, flash }) => {
+}> = ({ survey, brands, libraryQuestions, surveyQuestions, surveySections, error, flash }) => {
   const brand = brands.find(b => b.id === survey.brand_id)
   const prefix = brand?.url_prefix || (survey.brand_id === 'huiskamer' ? 'h' : 'e')
   // Library questions NOT yet in this survey — eligible for "add from library"
@@ -811,6 +813,99 @@ export const EditSurveyPage: FC<{
             <button type="submit" class="btn btn-teal" id="submitBtn">Wijzigingen opslaan</button>
           </section>
         </form>
+
+        {/* ───────── Hoofdstukken (sectie-titels die boven groepen vragen verschijnen) ───────── */}
+        <section class="admin-section survey-sections-section" id="sections">
+          <h2>Hoofdstukken in deze enquête</h2>
+          <p class="form-hint">
+            Hoofdstukken zijn de tussentitels die op de publieke enquête-pagina verschijnen boven
+            groepen vragen — bijvoorbeeld <em>Locatie & sfeer</em> met daaronder <em>De huiskamer als ruimte</em>.
+            Je kan ze hier <strong>per enquête</strong> aanpassen — het wijzigen van een hoofdstuk in
+            deze enquête heeft <strong>geen</strong> invloed op andere enquêtes.
+          </p>
+
+          <details class="survey-section-form-wrap" style="margin-bottom:14px;">
+            <summary class="btn btn-teal btn-small" style="display:inline-block;">+ Nieuw hoofdstuk toevoegen</summary>
+            <form method="POST" action={`/admin/surveys/${survey.id}/sections`}
+              class="survey-section-form" style="margin-top:12px;">
+              <input type="hidden" name="section_id" value="" />
+              <div class="form-grid">
+                <div class="form-field">
+                  <label>Korte titel (badge, NL) *</label>
+                  <input type="text" name="title_nl" required maxlength="60" placeholder="bv. Locatie & sfeer" />
+                </div>
+                <div class="form-field">
+                  <label>Korte titel (badge, EN)</label>
+                  <input type="text" name="title_en" maxlength="60" placeholder="e.g. Location & atmosphere" />
+                </div>
+                <div class="form-field full">
+                  <label>Ondertitel / hoofding (NL)</label>
+                  <input type="text" name="subtitle_nl" maxlength="160" placeholder="bv. De huiskamer als ruimte." />
+                </div>
+                <div class="form-field full">
+                  <label>Ondertitel / hoofding (EN)</label>
+                  <input type="text" name="subtitle_en" maxlength="160" placeholder="e.g. The living room as a venue." />
+                </div>
+              </div>
+              <div class="form-actions-inline">
+                <button type="submit" class="btn btn-teal btn-small">Toevoegen</button>
+              </div>
+            </form>
+          </details>
+
+          {surveySections.length === 0 ? (
+            <p class="form-empty">Nog geen hoofdstukken. Voeg er één toe hierboven.</p>
+          ) : (
+            <div class="survey-section-list">
+              {surveySections.map((s, idx) => (
+                <details class="survey-section-row" data-section-id={s.section_id}>
+                  <summary>
+                    <span class="ss-order">{idx + 1}.</span>
+                    <span class="ss-id">{s.section_id}</span>
+                    <span class="ss-main">
+                      <span class="ss-title-nl">{s.title_nl}</span>
+                      {s.subtitle_nl ? <span class="ss-subtitle">{s.subtitle_nl}</span> : null}
+                    </span>
+                    <span class="ss-edit-hint">✏️ Bewerk</span>
+                  </summary>
+                  <div class="survey-section-edit">
+                    <form method="POST" action={`/admin/surveys/${survey.id}/sections`} class="survey-section-form">
+                      <input type="hidden" name="section_id" value={s.section_id} />
+                      <div class="form-grid">
+                        <div class="form-field">
+                          <label>Korte titel (badge, NL) *</label>
+                          <input type="text" name="title_nl" required maxlength="60" value={s.title_nl} />
+                        </div>
+                        <div class="form-field">
+                          <label>Korte titel (badge, EN)</label>
+                          <input type="text" name="title_en" maxlength="60" value={s.title_en} />
+                        </div>
+                        <div class="form-field full">
+                          <label>Ondertitel / hoofding (NL)</label>
+                          <input type="text" name="subtitle_nl" maxlength="160" value={s.subtitle_nl || ''} />
+                        </div>
+                        <div class="form-field full">
+                          <label>Ondertitel / hoofding (EN)</label>
+                          <input type="text" name="subtitle_en" maxlength="160" value={s.subtitle_en || ''} />
+                        </div>
+                      </div>
+                      <div class="form-actions-inline">
+                        <button type="submit" class="btn btn-teal btn-small">Opslaan</button>
+                      </div>
+                    </form>
+                    <form method="POST" action={`/admin/surveys/${survey.id}/sections/${s.section_id}/delete`}
+                      class="inline-form delete-ss-form" style="margin-top:10px;">
+                      <button type="submit" class="btn btn-ghost btn-tiny btn-red-text"
+                        title="Verwijder dit hoofdstuk (vragen blijven bestaan, vallen onder 'Algemeen')">
+                        🗑 Verwijder hoofdstuk
+                      </button>
+                    </form>
+                  </div>
+                </details>
+              ))}
+            </div>
+          )}
+        </section>
 
         {/* ───────── Vragen in deze enquête (eigen snapshot — los van bibliotheek) ───────── */}
         <section class="admin-section survey-questions-section">

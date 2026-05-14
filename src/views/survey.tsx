@@ -1,10 +1,14 @@
 import type { FC } from 'hono/jsx'
 import { Layout } from './layout'
 import { QUESTIONS, type Question, surveyQuestionsToUi } from '../lib/questions'
-import type { SurveyQuestion } from '../lib/surveys'
+import type { SurveyQuestion, SurveySection } from '../lib/surveys'
 import { UI, SECTIONS_I18N, QUESTIONS_I18N, type Lang } from '../lib/i18n'
 import type { Brand, Survey } from '../lib/surveys'
 import { v } from '../lib/version'
+
+/** Section-render record used by the public survey page. Either built from
+ *  the per-survey snapshot in the DB, or as a fallback from SECTIONS_I18N. */
+type RenderSection = { id: string; title: string; subtitle: string }
 
 const SiteHeader: FC<{ lang: Lang; brand?: Brand | null; survey?: Survey | null }> = ({ lang, brand, survey }) => {
   const t = UI[lang]
@@ -192,13 +196,11 @@ const ParagraphInput: FC<{ q: { id: string } }> = ({ q }) => (
   <textarea id={q.id} name={q.id} rows={4} maxlength="3000" autocomplete="off"></textarea>
 )
 
-const SectionDivider: FC<{ id: string; lang: Lang }> = ({ id, lang }) => {
-  const sections = SECTIONS_I18N[lang]
-  const s = sections.find(x => x.id === id)!
+const SectionDivider: FC<{ section: RenderSection }> = ({ section }) => {
   return (
-    <div class="section-divider" id={`section-${id}`}>
-      <span class="badge badge-orange italic-serif">{s.title}</span>
-      <h2>{s.subtitle}</h2>
+    <div class="section-divider" id={`section-${section.id}`}>
+      <span class="badge badge-orange italic-serif">{section.title}</span>
+      {section.subtitle ? <h2>{section.subtitle}</h2> : null}
     </div>
   )
 }
@@ -210,7 +212,10 @@ export const SurveyPage: FC<{
   /** Per-survey snapshot questions, the new source of truth. When provided
    *  we render exclusively from these and bypass the hardcoded QUESTIONS array. */
   surveyQuestions?: SurveyQuestion[] | null
-}> = ({ lang = 'nl', brand, survey, surveyQuestions }) => {
+  /** Per-survey snapshot section dividers, the new source of truth. When provided
+   *  we render exclusively from these and bypass the hardcoded SECTIONS_I18N. */
+  surveySections?: SurveySection[] | null
+}> = ({ lang = 'nl', brand, survey, surveyQuestions, surveySections }) => {
   const t = UI[lang]
   // Build the runtime question list.
   //  - If snapshot rows were supplied (the normal case from the route handler):
@@ -230,7 +235,35 @@ export const SurveyPage: FC<{
     if (!grouped[q.section]) grouped[q.section] = []
     grouped[q.section].push(q)
   }
-  const sections = SECTIONS_I18N[lang]
+  // Build the section divider list:
+  //  - If a per-survey snapshot of sections is supplied: use it as the source of
+  //    truth (admin-edited title + subtitle, per-survey ordering).
+  //  - Otherwise fall back to the hardcoded SECTIONS_I18N (legacy code paths).
+  const sectionsFromSnapshot = Array.isArray(surveySections) && surveySections.length > 0
+  const sections: RenderSection[] = sectionsFromSnapshot
+    ? surveySections!.map(s => ({
+        id: s.section_id,
+        title: lang === 'en' ? (s.title_en || s.title_nl) : s.title_nl,
+        subtitle: lang === 'en'
+          ? (s.subtitle_en || s.subtitle_nl || '')
+          : (s.subtitle_nl || ''),
+      }))
+    : SECTIONS_I18N[lang].map(s => ({ id: s.id, title: s.title, subtitle: s.subtitle }))
+  // Catch-all for questions whose section_id isn't in the survey's section list
+  // (e.g. orphan question after a section was deleted, or legacy data) — render
+  // them under the first section so they aren't silently lost.
+  const knownSectionIds = new Set(sections.map(s => s.id))
+  const orphanQuestions: Question[] = []
+  for (const sid of Object.keys(grouped)) {
+    if (!knownSectionIds.has(sid)) {
+      orphanQuestions.push(...grouped[sid])
+      delete grouped[sid]
+    }
+  }
+  if (orphanQuestions.length > 0 && sections.length > 0) {
+    const firstId = sections[0].id
+    grouped[firstId] = [...(grouped[firstId] || []), ...orphanQuestions]
+  }
   const totalQuestions = filtered.length
   // Thanks URL stays within the survey context
   const thanksUrl = brand && survey
@@ -273,7 +306,7 @@ export const SurveyPage: FC<{
             if (list.length === 0) return null
             return (
               <>
-                <SectionDivider id={section.id} lang={lang} />
+                <SectionDivider section={section} />
                 {list.map(q => (
                   <QuestionView q={q} lang={lang} useI18nOverride={!fromSnapshot} />
                 ))}

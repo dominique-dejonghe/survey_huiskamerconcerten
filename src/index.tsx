@@ -38,6 +38,9 @@ import {
   listSurveyQuestions, getSurveyQuestion,
   copyLibraryQuestionToSurvey, createSurveyQuestion,
   updateSurveyQuestion, deleteSurveyQuestion, reorderSurveyQuestions,
+  listSurveySections, getSurveySection,
+  upsertSurveySection, deleteSurveySection,
+  copySurveySections, seedDefaultSurveySections,
   type QuestionInput,
 } from './lib/surveys'
 import type { Lang } from './lib/i18n'
@@ -151,9 +154,22 @@ async function renderSurveyForSlug(c: any, prefix: string, slug: string, lang: L
   // This is the whole point of the snapshot refactor: each survey lives its
   // own life, edits to the library never propagate retroactively.
   const surveyQuestions = await listSurveyQuestions(c.env.DB, survey.id)
+  // Same story for section dividers: read the per-survey snapshot. Lazy-seed
+  // defaults the very first time an old survey (created before migration 0008)
+  // is requested, so admins can edit them.
+  let surveySections = await listSurveySections(c.env.DB, survey.id)
+  if (surveySections.length === 0) {
+    try {
+      await seedDefaultSurveySections(c.env.DB, survey.id)
+      surveySections = await listSurveySections(c.env.DB, survey.id)
+    } catch (e) {
+      console.error('seedDefaultSurveySections (renderSurveyForSlug) failed', e)
+    }
+  }
   setNoCacheHeaders(c)
   return c.html(
-    <SurveyPage lang={lang} brand={brand} survey={survey} surveyQuestions={surveyQuestions} />
+    <SurveyPage lang={lang} brand={brand} survey={survey}
+      surveyQuestions={surveyQuestions} surveySections={surveySections} />
   )
 }
 
@@ -409,6 +425,15 @@ app.post('/admin/surveys', async (c) => {
     }
   }
 
+  // Seed the survey with the default set of section dividers (Algemene
+  // beleving, Locatie & sfeer, etc.). Admin can rename / reorder / remove
+  // these afterwards per-survey without affecting any other survey.
+  try {
+    await seedDefaultSurveySections(c.env.DB, created.id)
+  } catch (e) {
+    console.error('section seed failed', e)
+  }
+
   // Audit log
   const ip = getClientIp(c)
   const ipHash = await hashIp(ip, c.env.IP_HASH_SALT || 'dev')
@@ -441,11 +466,21 @@ app.get('/admin/surveys/:id/edit', async (c) => {
   const brands = await listBrands(c.env.DB)
   const libraryQuestions = await listLibraryQuestions(c.env.DB)
   const surveyQuestions = await listSurveyQuestions(c.env.DB, id)
+  let surveySections = await listSurveySections(c.env.DB, id)
+  // Safety net: older surveys created before migration 0008 may have no
+  // section rows. Seed defaults on-the-fly so admin never sees an empty list.
+  if (surveySections.length === 0) {
+    try {
+      await seedDefaultSurveySections(c.env.DB, id)
+      surveySections = await listSurveySections(c.env.DB, id)
+    } catch (e) { console.error('lazy section seed failed', e) }
+  }
   const error = c.req.query('error') || ''
   const flash = c.req.query('flash') || ''
   return c.html(
     <EditSurveyPage survey={survey} brands={brands}
       libraryQuestions={libraryQuestions} surveyQuestions={surveyQuestions}
+      surveySections={surveySections}
       error={error} flash={flash} />,
   )
 })
@@ -581,6 +616,47 @@ app.post('/admin/surveys/:id/duplicate', async (c) => {
     return c.redirect('/admin?error=' + encodeURIComponent('Enquête bestaat niet (meer).'))
   }
   const copy = await duplicateSurvey(c.env.DB, id)
+
+  // Copy questions and sections snapshot from source → new survey. We need
+  // both so the duplicate is a real working starting point, not just an
+  // empty shell with metadata.
+  try {
+    const sourceQs = await listSurveyQuestions(c.env.DB, id)
+    for (let i = 0; i < sourceQs.length; i++) {
+      const sq = sourceQs[i]
+      // Re-snapshot from library where possible (preserves source_code link);
+      // for purely custom questions, fall back to creating from snapshot fields.
+      if (sq.source_code) {
+        try { await copyLibraryQuestionToSurvey(c.env.DB, copy.id, sq.source_code, i) } catch {}
+      } else {
+        try {
+          await createSurveyQuestion(c.env.DB, copy.id, {
+            code: sq.code,
+            type: sq.type,
+            category: sq.category,
+            required: sq.required === 1,
+            scale_min: sq.scale_min,
+            scale_max: sq.scale_max,
+            label_nl: sq.label_nl,
+            label_en: sq.label_en,
+            helper_nl: sq.helper_nl,
+            helper_en: sq.helper_en,
+            min_label_nl: sq.min_label_nl,
+            min_label_en: sq.min_label_en,
+            max_label_nl: sq.max_label_nl,
+            max_label_en: sq.max_label_en,
+            options_nl: sq.options_nl,
+            options_en: sq.options_en,
+            conditional_on: sq.conditional_on,
+          })
+        } catch {}
+      }
+    }
+    await copySurveySections(c.env.DB, id, copy.id)
+  } catch (e) {
+    console.error('duplicate snapshot copy failed', e)
+  }
+
   const ip = getClientIp(c)
   const ipHash = await hashIp(ip, c.env.IP_HASH_SALT || 'dev')
   await logAudit(c.env.DB, 'survey_duplicate', ipHash, {
@@ -986,6 +1062,116 @@ app.post('/admin/surveys/:id/questions/reorder', async (c) => {
     thanksNl: survey.thanks_nl, thanksEn: survey.thanks_en,
   })
   return c.redirect(`/admin/surveys/${id}/edit?flash=` + encodeURIComponent('Volgorde bijgewerkt.'))
+})
+
+// ============================================================
+// PER-SURVEY SECTIONS — Admin CRUD for `survey_sections`
+// Sections are the headings shown between groups of questions on the public
+// page. Each survey owns its own list, fully editable independently.
+// ============================================================
+
+// POST — upsert a section (id + titles). When sectionId is empty we slugify
+// the NL title to derive a stable id.
+app.post('/admin/surveys/:id/sections', async (c) => {
+  const guard = await requireAdmin(c)
+  if (guard) return guard
+  const id = parseInt(c.req.param('id'), 10)
+  const survey = await getSurveyById(c.env.DB, id)
+  if (!survey) return c.notFound()
+
+  const form = await c.req.formData()
+  const get = (k: string) => { const v = form.get(k); return typeof v === 'string' ? v.trim() : '' }
+
+  const sectionIdRaw = get('section_id')
+  const titleNl = get('title_nl')
+  const titleEn = get('title_en')
+  const subtitleNl = get('subtitle_nl')
+  const subtitleEn = get('subtitle_en')
+
+  if (!titleNl) {
+    return c.redirect(`/admin/surveys/${id}/edit?error=` + encodeURIComponent('Hoofdstuk-titel (NL) is verplicht.'))
+  }
+
+  // Derive a stable id from titleNl if not provided, kebab-case, max 32 chars.
+  const sectionId = sectionIdRaw || slugify(titleNl).slice(0, 32) || `section-${Date.now()}`
+
+  // For new sections, append at the end of the order.
+  const existing = await getSurveySection(c.env.DB, id, sectionId)
+  let order: number
+  if (existing) {
+    order = existing.display_order
+  } else {
+    const all = await listSurveySections(c.env.DB, id)
+    order = all.length > 0 ? Math.max(...all.map(s => s.display_order)) + 1 : 0
+  }
+
+  try {
+    await upsertSurveySection(c.env.DB, id, {
+      sectionId,
+      displayOrder: order,
+      titleNl,
+      titleEn: titleEn || titleNl,
+      subtitleNl: subtitleNl || null,
+      subtitleEn: subtitleEn || null,
+    })
+    return c.redirect(`/admin/surveys/${id}/edit?flash=` + encodeURIComponent(
+      existing ? `Hoofdstuk "${titleNl}" bijgewerkt.` : `Hoofdstuk "${titleNl}" toegevoegd.`,
+    ) + '#sections')
+  } catch (e: any) {
+    return c.redirect(`/admin/surveys/${id}/edit?error=` + encodeURIComponent(
+      e?.message || 'Opslaan van hoofdstuk mislukt.',
+    ))
+  }
+})
+
+// POST — delete a section.
+// Note: this does NOT delete the questions inside it. Questions just become
+// orphans (their category is unchanged) and the public render then falls
+// back to grouping them under "Algemeen" until you reassign them.
+app.post('/admin/surveys/:id/sections/:sectionId/delete', async (c) => {
+  const guard = await requireAdmin(c)
+  if (guard) return guard
+  const id = parseInt(c.req.param('id'), 10)
+  const sectionId = c.req.param('sectionId')
+  const survey = await getSurveyById(c.env.DB, id)
+  if (!survey) return c.notFound()
+  const sect = await getSurveySection(c.env.DB, id, sectionId)
+  if (!sect) {
+    return c.redirect(`/admin/surveys/${id}/edit?error=` + encodeURIComponent('Hoofdstuk bestaat niet (meer).'))
+  }
+  await deleteSurveySection(c.env.DB, id, sectionId)
+  return c.redirect(`/admin/surveys/${id}/edit?flash=` + encodeURIComponent(
+    `Hoofdstuk "${sect.title_nl}" verwijderd.`,
+  ) + '#sections')
+})
+
+// POST — reorder sections (ordered_ids: comma-separated section_id list)
+app.post('/admin/surveys/:id/sections/reorder', async (c) => {
+  const guard = await requireAdmin(c)
+  if (guard) return guard
+  const id = parseInt(c.req.param('id'), 10)
+  const survey = await getSurveyById(c.env.DB, id)
+  if (!survey) return c.notFound()
+  const form = await c.req.formData()
+  const ordered = String(form.get('ordered_ids') || '').split(',').map(s => s.trim()).filter(Boolean)
+  if (ordered.length === 0) {
+    return c.redirect(`/admin/surveys/${id}/edit?error=` + encodeURIComponent('Volgorde ontbreekt.'))
+  }
+  // Re-upsert each with its new display_order. We need to look up each row
+  // first to keep title/subtitle untouched.
+  for (let i = 0; i < ordered.length; i++) {
+    const sect = await getSurveySection(c.env.DB, id, ordered[i])
+    if (!sect) continue
+    await upsertSurveySection(c.env.DB, id, {
+      sectionId: sect.section_id,
+      displayOrder: i,
+      titleNl: sect.title_nl,
+      titleEn: sect.title_en,
+      subtitleNl: sect.subtitle_nl,
+      subtitleEn: sect.subtitle_en,
+    })
+  }
+  return c.redirect(`/admin/surveys/${id}/edit?flash=` + encodeURIComponent('Hoofdstuk-volgorde bijgewerkt.') + '#sections')
 })
 
 // JSON export of full library — handy as a backup or to copy to another deployment

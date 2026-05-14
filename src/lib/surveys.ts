@@ -836,3 +836,124 @@ export async function duplicateSurvey(
     thanksEn: source.thanks_en,
   })
 }
+
+// ============================================================
+// SURVEY-SCOPED SECTIONS (snapshot table `survey_sections`)
+// Section dividers shown between question groups on the public survey page.
+// Each survey owns its own list, fully editable independently. Same isolation
+// philosophy as `survey_questions`.
+// ============================================================
+
+export type SurveySection = {
+  survey_id: number
+  section_id: string
+  display_order: number
+  title_nl: string
+  title_en: string
+  subtitle_nl: string | null
+  subtitle_en: string | null
+  created_at: string
+  updated_at: string
+}
+
+/** All sections for a survey, ordered by display_order. */
+export async function listSurveySections(
+  db: D1Database, surveyId: number,
+): Promise<SurveySection[]> {
+  const r = await db.prepare(
+    `SELECT survey_id, section_id, display_order,
+            title_nl, title_en, subtitle_nl, subtitle_en,
+            created_at, updated_at
+     FROM survey_sections
+     WHERE survey_id = ?
+     ORDER BY display_order ASC, section_id ASC`,
+  ).bind(surveyId).all<SurveySection>()
+  return r.results ?? []
+}
+
+export async function getSurveySection(
+  db: D1Database, surveyId: number, sectionId: string,
+): Promise<SurveySection | null> {
+  const r = await db.prepare(
+    `SELECT survey_id, section_id, display_order,
+            title_nl, title_en, subtitle_nl, subtitle_en,
+            created_at, updated_at
+     FROM survey_sections
+     WHERE survey_id = ? AND section_id = ?`,
+  ).bind(surveyId, sectionId).first<SurveySection>()
+  return r ?? null
+}
+
+export type SurveySectionInput = {
+  sectionId: string
+  displayOrder: number
+  titleNl: string
+  titleEn: string
+  subtitleNl: string | null
+  subtitleEn: string | null
+}
+
+/** Upsert: insert if new, update if existing. */
+export async function upsertSurveySection(
+  db: D1Database, surveyId: number, input: SurveySectionInput,
+): Promise<void> {
+  await db.prepare(
+    `INSERT INTO survey_sections
+       (survey_id, section_id, display_order, title_nl, title_en, subtitle_nl, subtitle_en, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+     ON CONFLICT(survey_id, section_id) DO UPDATE SET
+       display_order = excluded.display_order,
+       title_nl      = excluded.title_nl,
+       title_en      = excluded.title_en,
+       subtitle_nl   = excluded.subtitle_nl,
+       subtitle_en   = excluded.subtitle_en,
+       updated_at    = CURRENT_TIMESTAMP`,
+  ).bind(
+    surveyId,
+    input.sectionId,
+    input.displayOrder,
+    input.titleNl,
+    input.titleEn,
+    input.subtitleNl,
+    input.subtitleEn,
+  ).run()
+}
+
+export async function deleteSurveySection(
+  db: D1Database, surveyId: number, sectionId: string,
+): Promise<void> {
+  await db.prepare(
+    `DELETE FROM survey_sections WHERE survey_id = ? AND section_id = ?`,
+  ).bind(surveyId, sectionId).run()
+}
+
+/** Copy all sections from source survey to target survey. Used on duplicate. */
+export async function copySurveySections(
+  db: D1Database, sourceSurveyId: number, targetSurveyId: number,
+): Promise<void> {
+  await db.prepare(
+    `INSERT OR IGNORE INTO survey_sections
+       (survey_id, section_id, display_order, title_nl, title_en, subtitle_nl, subtitle_en)
+     SELECT ?, section_id, display_order, title_nl, title_en, subtitle_nl, subtitle_en
+     FROM survey_sections
+     WHERE survey_id = ?`,
+  ).bind(targetSurveyId, sourceSurveyId).run()
+}
+
+/** Seed a brand-new survey with the seven default sections. */
+export async function seedDefaultSurveySections(
+  db: D1Database, surveyId: number,
+): Promise<void> {
+  const defaults: SurveySectionInput[] = [
+    { sectionId: 'algemeen',    displayOrder: 0, titleNl: 'Algemene beleving',      titleEn: 'Overall experience',     subtitleNl: 'Hoe heb je de reeks ervaren?',      subtitleEn: 'How did you experience the series?' },
+    { sectionId: 'locatie',     displayOrder: 1, titleNl: 'Locatie & sfeer',        titleEn: 'Location & atmosphere',  subtitleNl: 'De huiskamer als ruimte.',          subtitleEn: 'The living room as a venue.' },
+    { sectionId: 'muzikaal',    displayOrder: 2, titleNl: 'Muzikaal & instrument',  titleEn: 'Music & instrument',     subtitleNl: 'Akoestiek, fortepiano, programma.', subtitleEn: 'Acoustics, fortepiano, programme.' },
+    { sectionId: 'jos',         displayOrder: 3, titleNl: 'Jos & Ayako als gastheer', titleEn: 'Jos & Ayako as hosts', subtitleNl: 'Toelichting en interactie.',        subtitleEn: 'Commentary and interaction.' },
+    { sectionId: 'organisatie', displayOrder: 4, titleNl: 'Praktische organisatie', titleEn: 'Practical organisation', subtitleNl: 'Communicatie, receptie, bijdrage.', subtitleEn: 'Communication, reception, contribution.' },
+    { sectionId: 'reeks2',      displayOrder: 5, titleNl: 'Reeks II en verder',     titleEn: 'Series II and beyond',   subtitleNl: 'Wat zou je graag horen?',           subtitleEn: 'What would you like to hear?' },
+    { sectionId: 'totslot',     displayOrder: 6, titleNl: 'Tot slot',               titleEn: 'Finally',                subtitleNl: 'Naam en contact (optioneel).',      subtitleEn: 'Name and contact (optional).' },
+  ]
+  for (const s of defaults) {
+    await upsertSurveySection(db, surveyId, s)
+  }
+}
