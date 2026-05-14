@@ -10,7 +10,7 @@
 //   - public/static/styles.css
 // Format: YYYYMMDD-HHMM (UTC) to keep monotonic ordering.
 
-export const ASSET_VERSION = '20260514-1245'
+export const ASSET_VERSION = '20260514-1330'
 
 /** Helper: append ?v=... to a static path (preserves existing query). */
 export function v(path: string): string {

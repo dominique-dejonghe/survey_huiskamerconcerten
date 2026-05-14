@@ -1644,7 +1644,7 @@ body.survey-body { background: #FBF8F2; }
 }
 .survey-section-row > summary {
   display: grid;
-  grid-template-columns: 22px 28px 110px 1fr auto;
+  grid-template-columns: 26px 28px 110px 1fr auto;
   align-items: center;
   gap: 12px;
   padding: 9px 12px;
@@ -1707,7 +1707,7 @@ body.survey-body { background: #FBF8F2; }
 
 @media (max-width: 720px) {
   .survey-section-row > summary {
-    grid-template-columns: 22px 28px 1fr auto;
+    grid-template-columns: 30px 28px 1fr auto;
   }
   .ss-id { display: none; }
   .survey-section-form .form-grid {
@@ -1716,46 +1716,77 @@ body.survey-body { background: #FBF8F2; }
 }
 
 /* ============================================================
-   Drag-and-drop styling — used by SortableJS on sections + questions
+   Reorder UI — pijltjes (▲▼) + sectie-dropdown, vervangt drag-and-drop
    ============================================================ */
-.drag-handle {
+.reorder-arrows {
   display: inline-flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
-  width: 22px;
-  height: 22px;
-  color: #b4b4ac;
-  cursor: grab;
-  user-select: none;
-  font-size: 14px;
-  line-height: 1;
-  font-weight: 700;
-  border-radius: 3px;
+  gap: 1px;
   flex-shrink: 0;
-  touch-action: none;
+  user-select: none;
+  width: 26px;
 }
-.drag-handle:hover {
-  color: #2d8a8a;
-  background: #f0f0e8;
+.arrow-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 16px;
+  padding: 0;
+  margin: 0;
+  background: #f6f6f1;
+  border: 1px solid #d8d8d2;
+  border-radius: 3px;
+  color: #6a6a64;
+  font-size: 9px;
+  line-height: 1;
+  cursor: pointer;
+  transition: background 0.12s ease, color 0.12s ease, border-color 0.12s ease;
 }
-.drag-handle:active,
-.drag-handle.dragging {
-  cursor: grabbing;
+.arrow-btn:hover:not(:disabled) {
+  background: #f4a93c;
+  color: #fff;
+  border-color: #e89c2c;
+}
+.arrow-btn:active:not(:disabled) {
+  transform: translateY(1px);
+}
+.arrow-btn:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+}
+/* Touch-friendly hit area without making the visual button bigger */
+@media (hover: none) and (pointer: coarse) {
+  .arrow-btn {
+    width: 28px;
+    height: 20px;
+    font-size: 10px;
+  }
+  .reorder-arrows {
+    width: 30px;
+  }
 }
 
-/* SortableJS drag states */
-.sortable-ghost {
-  opacity: 0.4;
-  background: #fff7e0 !important;
-  border-color: #f4a93c !important;
+/* Section-switcher dropdown next to each question row */
+.sq-section-select {
+  font-size: 11.5px;
+  padding: 3px 6px;
+  border: 1px solid #d8d8d2;
+  border-radius: 3px;
+  background: #fff;
+  color: #555;
+  max-width: 160px;
+  cursor: pointer;
 }
-.sortable-chosen {
-  background: #fdfdfa !important;
+.sq-section-select:hover {
+  border-color: #2d8a8a;
+  color: #2d2d2d;
 }
-.sortable-drag {
-  opacity: 0.95;
-  box-shadow: 0 6px 20px rgba(0,0,0,0.15);
-  cursor: grabbing !important;
+.sq-section-select:focus {
+  outline: 2px solid #2d8a8a;
+  outline-offset: 1px;
 }
 
 /* Questions grouped per section */
@@ -1791,13 +1822,12 @@ body.survey-body { background: #FBF8F2; }
   display: flex;
   flex-direction: column;
   gap: 4px;
-  min-height: 40px;
+  min-height: 24px;
   padding: 4px 0;
   border-radius: 4px;
-  transition: background 0.15s ease;
 }
 .sq-group-list:empty::before {
-  content: "Sleep een vraag hierheen…";
+  content: "Nog geen vragen in deze sectie. Gebruik het ▼-pijltje van een vraag hierboven om er één naar hier te verplaatsen, of het sectie-keuzemenu rechts.";
   display: block;
   padding: 10px;
   color: #b4b4ac;
@@ -1808,20 +1838,44 @@ body.survey-body { background: #FBF8F2; }
   border-radius: 4px;
   background: #fff;
 }
-.sq-group-list.drag-over {
-  background: #fff7e0;
-  outline: 2px dashed #f4a93c;
-  outline-offset: -2px;
-}
 
-/* Survey-question rows: extra column for drag handle */
+/* Survey-question rows: 26px column for the arrow stack */
 .survey-question-row {
-  grid-template-columns: 22px 28px 110px 1fr auto !important;
+  grid-template-columns: 26px 28px 110px 1fr auto !important;
 }
 @media (max-width: 720px) {
   .survey-question-row {
-    grid-template-columns: 22px 28px 1fr auto !important;
+    grid-template-columns: 30px 28px 1fr auto !important;
   }
+  .sq-section-select { max-width: 110px; }
+}
+
+/* ============================================================
+   Toast (gebruikt door admin-reorder.js)
+   ============================================================ */
+.admin-toast {
+  position: fixed;
+  bottom: 20px;
+  left: 50%;
+  transform: translateX(-50%) translateY(20px);
+  background: #2d8a8a;
+  color: #fff;
+  padding: 10px 18px;
+  border-radius: 4px;
+  font-size: 13px;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.18);
+  opacity: 0;
+  transition: opacity 0.25s ease, transform 0.25s ease;
+  z-index: 9999;
+  pointer-events: none;
+  max-width: 90vw;
+}
+.admin-toast.is-visible {
+  opacity: 1;
+  transform: translateX(-50%) translateY(0);
+}
+.admin-toast.is-error {
+  background: #b03030;
 }
 
 /* ----- Submit row ----- */

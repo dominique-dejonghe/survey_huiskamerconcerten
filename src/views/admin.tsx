@@ -868,7 +868,16 @@ export const EditSurveyPage: FC<{
               {surveySections.map((s, idx) => (
                 <details class="survey-section-row" data-section-id={s.section_id}>
                   <summary>
-                    <span class="drag-handle ss-drag" title="Sleep om volgorde te wijzigen" aria-label="Versleep">⋮⋮</span>
+                    <span class="reorder-arrows" aria-label="Volgorde wijzigen">
+                      <button type="button" class="arrow-btn arrow-up ss-up"
+                        data-section-id={s.section_id}
+                        title="Verplaats omhoog"
+                        disabled={idx === 0}>▲</button>
+                      <button type="button" class="arrow-btn arrow-down ss-down"
+                        data-section-id={s.section_id}
+                        title="Verplaats omlaag"
+                        disabled={idx === surveySections.length - 1}>▼</button>
+                    </span>
                     <span class="ss-order">{idx + 1}.</span>
                     <span class="ss-id">{s.section_id}</span>
                     <span class="ss-main">
@@ -952,8 +961,7 @@ export const EditSurveyPage: FC<{
           ) : (() => {
             // ── Group questions per section, in the order the sections themselves
             // appear, with a fallback bucket for orphans (category not matching
-            // any known section). Render each section as its own Sortable group;
-            // SortableJS will be wired up to allow drag between groups.
+            // any known section). Render each section as its own group.
             const sectionList = surveySections.length > 0
               ? surveySections
               : [{ section_id: 'algemeen', title_nl: 'Algemeen', subtitle_nl: '', title_en: '', subtitle_en: '', display_order: 0, survey_id: survey.id, created_at: '', updated_at: '' }]
@@ -980,6 +988,9 @@ export const EditSurveyPage: FC<{
               bucketed.set(first, [...(bucketed.get(first) || []), ...orphans])
             }
             let runningNum = 0
+            // Determine first/last row across ALL groups for arrow-disabled hints
+            const totalQuestions = surveyQuestions.length
+            let absoluteIdx = -1
             return (
               <div class="survey-question-groups" id="surveyQuestionGroups"
                 data-reorder-url={`/admin/surveys/${survey.id}/questions/reorder`}>
@@ -994,9 +1005,22 @@ export const EditSurveyPage: FC<{
                       <div class="sq-group-list" data-section-id={s.section_id}>
                         {list.map(q => {
                           runningNum++
+                          absoluteIdx++
+                          const isFirstOverall = absoluteIdx === 0
+                          const isLastOverall = absoluteIdx === totalQuestions - 1
                           return (
-                            <div class="survey-question-row" data-code={q.code} data-order={String(q.display_order)}>
-                              <span class="drag-handle sq-drag" title="Sleep om volgorde of sectie te wijzigen" aria-label="Versleep">⋮⋮</span>
+                            <div class="survey-question-row" data-code={q.code} data-order={String(q.display_order)}
+                              data-section-id={s.section_id}>
+                              <span class="reorder-arrows" aria-label="Volgorde wijzigen">
+                                <button type="button" class="arrow-btn arrow-up sq-up"
+                                  data-code={q.code}
+                                  title="Verplaats omhoog"
+                                  disabled={isFirstOverall}>▲</button>
+                                <button type="button" class="arrow-btn arrow-down sq-down"
+                                  data-code={q.code}
+                                  title="Verplaats omlaag"
+                                  disabled={isLastOverall}>▼</button>
+                              </span>
                               <span class="sq-order">{runningNum}.</span>
                               <span class="sq-code">{q.code}</span>
                               <div class="sq-main">
@@ -1007,6 +1031,16 @@ export const EditSurveyPage: FC<{
                                 </span>
                               </div>
                               <div class="sq-actions">
+                                <select class="sq-section-select"
+                                  data-code={q.code}
+                                  data-current-section={s.section_id}
+                                  title="Verplaats naar andere sectie">
+                                  {sectionList.map(opt => (
+                                    <option value={opt.section_id} selected={opt.section_id === s.section_id}>
+                                      → {opt.title_nl}
+                                    </option>
+                                  ))}
+                                </select>
                                 <a href={`/admin/surveys/${survey.id}/questions/${q.code}/edit`}
                                    class="btn btn-ghost btn-tiny" title="Bewerk deze vraag (alleen voor deze enquête)">
                                   ✏️ Bewerk
@@ -1055,10 +1089,9 @@ export const EditSurveyPage: FC<{
         </section>
       </main>
 
-      <script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.2/Sortable.min.js" defer></script>
       <script src={v('/static/admin-new-survey.js')} defer></script>
       <script src={v('/static/admin-survey-edit.js')} defer></script>
-      <script src={v('/static/admin-drag-drop.js')} defer></script>
+      <script src={v('/static/admin-reorder.js')} defer></script>
     </Layout>
   )
 }
