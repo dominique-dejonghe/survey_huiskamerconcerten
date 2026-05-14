@@ -582,6 +582,24 @@ export async function reorderSurveyQuestions(
   if (stmts.length > 0) await db.batch(stmts)
 }
 
+/** Reorder + optionally re-assign sections in one shot. Each item gives the
+ *  desired new position (implied by array order) and the section it should
+ *  belong to (written to the `category` column). Used by drag-and-drop. */
+export async function reorderAndReassignSurveyQuestions(
+  db: D1Database,
+  surveyId: number,
+  items: Array<{ code: string; sectionId: string }>,
+): Promise<void> {
+  const stmts = items.map((it, idx) =>
+    db.prepare(
+      `UPDATE survey_questions
+       SET display_order = ?, category = ?
+       WHERE survey_id = ? AND code = ?`,
+    ).bind(idx, it.sectionId, surveyId, it.code),
+  )
+  if (stmts.length > 0) await db.batch(stmts)
+}
+
 // ============================================================
 // CREATE SURVEY — used by /admin/surveys/new
 // ============================================================

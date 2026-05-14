@@ -38,6 +38,7 @@ import {
   listSurveyQuestions, getSurveyQuestion,
   copyLibraryQuestionToSurvey, createSurveyQuestion,
   updateSurveyQuestion, deleteSurveyQuestion, reorderSurveyQuestions,
+  reorderAndReassignSurveyQuestions,
   listSurveySections, getSurveySection,
   upsertSurveySection, deleteSurveySection,
   copySurveySections, seedDefaultSurveySections,
@@ -940,7 +941,13 @@ app.post('/admin/surveys/:id/questions', async (c) => {
 })
 
 // POST — update existing survey-scoped question
-app.post('/admin/surveys/:id/questions/:code', async (c) => {
+// NOTE: route order matters — the more specific `/questions/reorder` and
+// `/questions/add-from-library` routes are declared FURTHER DOWN. Hono
+// matches in registration order, so this catch-all would normally swallow
+// those reserved paths. We restrict `:code` to a regex that requires a
+// q-prefix; real question codes always look like "q1_nps", "q14_bijdrage"
+// so this is safe and lets `reorder`/`add-from-library` fall through.
+app.post('/admin/surveys/:id/questions/:code{q[a-z0-9_]+}', async (c) => {
   const guard = await requireAdmin(c)
   if (guard) return guard
   const id = parseInt(c.req.param('id'), 10)
@@ -971,7 +978,7 @@ app.post('/admin/surveys/:id/questions/:code', async (c) => {
 })
 
 // POST — delete a question from this survey (does NOT touch library)
-app.post('/admin/surveys/:id/questions/:code/delete', async (c) => {
+app.post('/admin/surveys/:id/questions/:code{q[a-z0-9_]+}/delete', async (c) => {
   const guard = await requireAdmin(c)
   if (guard) return guard
   const id = parseInt(c.req.param('id'), 10)
@@ -1043,13 +1050,56 @@ app.post('/admin/surveys/:id/questions/reorder', async (c) => {
   const id = parseInt(c.req.param('id'), 10)
   const survey = await getSurveyById(c.env.DB, id)
   if (!survey) return c.notFound()
+
+  // Two payload formats are supported:
+  //   1. JSON POST from drag-and-drop:
+  //        { items: [{code, section}, ...] }
+  //      -> re-orders AND re-assigns each question's section in one shot.
+  //   2. Legacy form-encoded POST:
+  //        ordered_codes=code1,code2,code3
+  //      -> re-orders only, sections untouched.
+  const contentType = c.req.header('content-type') || ''
+  if (contentType.includes('application/json')) {
+    try {
+      const body = await c.req.json<{ items?: Array<{ code: string; section: string }> }>()
+      const items = Array.isArray(body.items) ? body.items : []
+      if (items.length === 0) {
+        return c.json({ ok: false, error: 'items leeg' }, 400)
+      }
+      const known = await listSurveyQuestions(c.env.DB, id)
+      const codeSet = new Set(known.map(q => q.code))
+      const cleaned = items
+        .filter(it => typeof it?.code === 'string' && codeSet.has(it.code))
+        .map(it => ({ code: it.code, sectionId: String(it.section || 'algemeen').trim() || 'algemeen' }))
+      if (cleaned.length === 0) {
+        return c.json({ ok: false, error: 'geen geldige codes' }, 400)
+      }
+      await reorderAndReassignSurveyQuestions(c.env.DB, id, cleaned)
+      const remaining = await listSurveyQuestions(c.env.DB, id)
+      await updateSurvey(c.env.DB, id, {
+        slug: survey.slug, seriesName: survey.series_name, artist: survey.artist,
+        concertDate: survey.concert_date, location: survey.location,
+        titleNl: survey.title_nl, titleEn: survey.title_en,
+        subtitleNl: survey.subtitle_nl, subtitleEn: survey.subtitle_en,
+        questionCodes: remaining.map(q => q.code),
+        status: survey.status, langDefault: survey.lang_default,
+        introNl: survey.intro_nl, introEn: survey.intro_en,
+        thanksNl: survey.thanks_nl, thanksEn: survey.thanks_en,
+      })
+      return c.json({ ok: true, count: cleaned.length })
+    } catch (e) {
+      console.error('reorder JSON error', e)
+      return c.json({ ok: false, error: 'JSON parse error' }, 400)
+    }
+  }
+
+  // Legacy form path (kept for backward compatibility).
   const form = await c.req.formData()
   const ordered = String(form.get('ordered_codes') || '').split(',').map(s => s.trim()).filter(Boolean)
   if (ordered.length === 0) {
     return c.redirect(`/admin/surveys/${id}/edit?error=` + encodeURIComponent('Volgorde ontbreekt.'))
   }
   await reorderSurveyQuestions(c.env.DB, id, ordered)
-  // sync legacy column
   const remaining = await listSurveyQuestions(c.env.DB, id)
   await updateSurvey(c.env.DB, id, {
     slug: survey.slug, seriesName: survey.series_name, artist: survey.artist,
@@ -1145,20 +1195,39 @@ app.post('/admin/surveys/:id/sections/:sectionId/delete', async (c) => {
   ) + '#sections')
 })
 
-// POST — reorder sections (ordered_ids: comma-separated section_id list)
+// POST — reorder sections. Accepts:
+//   - JSON: { ids: ['algemeen','locatie',...] } -> returns JSON {ok:true}
+//   - Form: ordered_ids=algemeen,locatie,... -> redirects with flash
 app.post('/admin/surveys/:id/sections/reorder', async (c) => {
   const guard = await requireAdmin(c)
   if (guard) return guard
   const id = parseInt(c.req.param('id'), 10)
   const survey = await getSurveyById(c.env.DB, id)
   if (!survey) return c.notFound()
-  const form = await c.req.formData()
-  const ordered = String(form.get('ordered_ids') || '').split(',').map(s => s.trim()).filter(Boolean)
+
+  let ordered: string[] = []
+  let isJson = false
+  const contentType = c.req.header('content-type') || ''
+  if (contentType.includes('application/json')) {
+    isJson = true
+    try {
+      const body = await c.req.json<{ ids?: string[] }>()
+      ordered = Array.isArray(body.ids) ? body.ids.map(s => String(s).trim()).filter(Boolean) : []
+    } catch (e) {
+      return c.json({ ok: false, error: 'JSON parse error' }, 400)
+    }
+  } else {
+    const form = await c.req.formData()
+    ordered = String(form.get('ordered_ids') || '').split(',').map(s => s.trim()).filter(Boolean)
+  }
+
   if (ordered.length === 0) {
+    if (isJson) return c.json({ ok: false, error: 'ids leeg' }, 400)
     return c.redirect(`/admin/surveys/${id}/edit?error=` + encodeURIComponent('Volgorde ontbreekt.'))
   }
   // Re-upsert each with its new display_order. We need to look up each row
   // first to keep title/subtitle untouched.
+  let count = 0
   for (let i = 0; i < ordered.length; i++) {
     const sect = await getSurveySection(c.env.DB, id, ordered[i])
     if (!sect) continue
@@ -1170,7 +1239,9 @@ app.post('/admin/surveys/:id/sections/reorder', async (c) => {
       subtitleNl: sect.subtitle_nl,
       subtitleEn: sect.subtitle_en,
     })
+    count++
   }
+  if (isJson) return c.json({ ok: true, count })
   return c.redirect(`/admin/surveys/${id}/edit?flash=` + encodeURIComponent('Hoofdstuk-volgorde bijgewerkt.') + '#sections')
 })
 

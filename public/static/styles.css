@@ -1644,7 +1644,7 @@ body.survey-body { background: #FBF8F2; }
 }
 .survey-section-row > summary {
   display: grid;
-  grid-template-columns: 28px 110px 1fr auto;
+  grid-template-columns: 22px 28px 110px 1fr auto;
   align-items: center;
   gap: 12px;
   padding: 9px 12px;
@@ -1707,11 +1707,120 @@ body.survey-body { background: #FBF8F2; }
 
 @media (max-width: 720px) {
   .survey-section-row > summary {
-    grid-template-columns: 28px 1fr auto;
+    grid-template-columns: 22px 28px 1fr auto;
   }
   .ss-id { display: none; }
   .survey-section-form .form-grid {
     grid-template-columns: 1fr;
+  }
+}
+
+/* ============================================================
+   Drag-and-drop styling — used by SortableJS on sections + questions
+   ============================================================ */
+.drag-handle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  color: #b4b4ac;
+  cursor: grab;
+  user-select: none;
+  font-size: 14px;
+  line-height: 1;
+  font-weight: 700;
+  border-radius: 3px;
+  flex-shrink: 0;
+  touch-action: none;
+}
+.drag-handle:hover {
+  color: #2d8a8a;
+  background: #f0f0e8;
+}
+.drag-handle:active,
+.drag-handle.dragging {
+  cursor: grabbing;
+}
+
+/* SortableJS drag states */
+.sortable-ghost {
+  opacity: 0.4;
+  background: #fff7e0 !important;
+  border-color: #f4a93c !important;
+}
+.sortable-chosen {
+  background: #fdfdfa !important;
+}
+.sortable-drag {
+  opacity: 0.95;
+  box-shadow: 0 6px 20px rgba(0,0,0,0.15);
+  cursor: grabbing !important;
+}
+
+/* Questions grouped per section */
+.sq-group {
+  margin-bottom: 18px;
+}
+.sq-group-header {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 4px 4px 6px 4px;
+  border-bottom: 1px solid #e8e8e3;
+  margin-bottom: 6px;
+}
+.sq-group-badge {
+  display: inline-block;
+  background: #F4A93C;
+  color: #fff;
+  padding: 2px 12px;
+  border-radius: 999px;
+  font-family: 'Playfair Display', Georgia, serif;
+  font-style: italic;
+  font-size: 11.5px;
+}
+.sq-group-title {
+  color: #2d8a8a;
+  font-style: italic;
+  font-family: 'Playfair Display', Georgia, serif;
+  font-size: 14px;
+  font-weight: 500;
+}
+.sq-group-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-height: 40px;
+  padding: 4px 0;
+  border-radius: 4px;
+  transition: background 0.15s ease;
+}
+.sq-group-list:empty::before {
+  content: "Sleep een vraag hierheen…";
+  display: block;
+  padding: 10px;
+  color: #b4b4ac;
+  font-style: italic;
+  font-size: 12px;
+  text-align: center;
+  border: 1px dashed #e0e0d8;
+  border-radius: 4px;
+  background: #fff;
+}
+.sq-group-list.drag-over {
+  background: #fff7e0;
+  outline: 2px dashed #f4a93c;
+  outline-offset: -2px;
+}
+
+/* Survey-question rows: extra column for drag handle */
+.survey-question-row {
+  grid-template-columns: 22px 28px 110px 1fr auto !important;
+}
+@media (max-width: 720px) {
+  .survey-question-row {
+    grid-template-columns: 22px 28px 1fr auto !important;
   }
 }
 
@@ -2064,6 +2173,87 @@ input[readonly] {
   cursor: pointer;
 }
 .survey-card-clickable:hover { background: rgba(0,0,0,0.02); }
+
+/* Bottom action strip — replaces the old single CTA. */
+.survey-card .survey-card-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 14px;
+  border-top: 1px solid #eee;
+  background: #fafafa;
+  flex-wrap: wrap;
+}
+.survey-card .survey-card-actions .survey-card-link {
+  font-size: 12px;
+  color: #777;
+  text-decoration: none;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 55%;
+}
+.survey-card .survey-card-actions .survey-card-link:hover { color: var(--brand-primary, #5B1F2A); }
+.survey-card .survey-card-actions .spacer { flex: 1; }
+
+.inline-form { display: inline-block; margin: 0; padding: 0; }
+.inline-form button { cursor: pointer; }
+
+/* Disabled-looking delete button (still clickable so JS can intercept and show
+   a useful message instead of silently doing nothing). */
+.btn-disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.btn-disabled:hover { background: transparent; }
+
+/* Danger hover only on trash icon when actually deletable. */
+.btn-danger-hover:hover {
+  background: #fdecea;
+  color: #b71c1c;
+}
+
+/* Danger zone at the bottom of the edit page. */
+.danger-zone {
+  margin-top: 32px;
+  border: 1px solid #f3d6d6;
+  background: #fffafa;
+  border-radius: 8px;
+}
+.danger-zone h2 { color: #9a2c2c; margin-top: 0; }
+.danger-zone-actions {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-top: 12px;
+}
+.danger-zone-actions .btn-red {
+  background: #c0392b;
+  color: #fff;
+}
+.danger-zone-actions .btn-red:hover { background: #a93226; }
+
+/* Char counter under intro/thanks textareas. */
+.char-count {
+  display: block;
+  margin-top: 4px;
+  color: #999;
+  font-size: 12px;
+  text-align: right;
+}
+.char-count.char-count-warn { color: #d97706; font-weight: 600; }
+
+/* Flash banner (success) — shared with question CRUD already, but if missing add it. */
+.form-flash {
+  background: #e8f5e9;
+  border: 1px solid #b2dfb6;
+  color: #1b5e20;
+  padding: 10px 14px;
+  border-radius: 6px;
+  margin-bottom: 16px;
+}
+.form-flash strong { font-size: 16px; margin-right: 6px; }
+0,0,0.02); }
 
 /* Bottom action strip — replaces the old single CTA. */
 .survey-card .survey-card-actions {

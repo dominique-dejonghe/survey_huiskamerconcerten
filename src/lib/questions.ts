@@ -194,10 +194,20 @@ import type { SurveyQuestion } from './surveys'
 
 /** Map a free-text category (like "Algemene beleving" or "Locatie & sfeer")
  *  to one of our known SECTIONS ids. Case-insensitive, accent-insensitive,
- *  substring-based. Falls back to 'algemeen' if nothing matches. */
-function categoryToSectionId(category: string | null): string {
+ *  substring-based. Falls back to 'algemeen' if nothing matches.
+ *
+ *  If `knownSectionIds` is provided (the survey's own section list), an exact
+ *  match on the normalised category wins first — this is what makes
+ *  drag-and-drop into a custom section (e.g. 'eten') work. */
+function categoryToSectionId(
+  category: string | null,
+  knownSectionIds?: ReadonlySet<string>,
+): string {
   if (!category) return 'algemeen'
-  const norm = category.toLowerCase().normalize('NFKD').replace(/[\u0300-\u036f]/g, '')
+  const norm = category.toLowerCase().normalize('NFKD').replace(/[\u0300-\u036f]/g, '').trim()
+  // 1. Exact match against survey's own sections (handles custom sections).
+  if (knownSectionIds && knownSectionIds.has(norm)) return norm
+  // 2. Heuristic substring matching (legacy categories like "Locatie & sfeer").
   const candidates: Array<{ id: string; keys: string[] }> = [
     { id: 'algemeen', keys: ['algemeen', 'beleving', 'overall'] },
     { id: 'locatie', keys: ['locatie', 'sfeer', 'huiskamer', 'restaurant', 'setting'] },
@@ -208,18 +218,32 @@ function categoryToSectionId(category: string | null): string {
     { id: 'totslot', keys: ['totslot', 'tot slot', 'naam', 'contact'] },
   ]
   for (const c of candidates) {
-    if (c.keys.some(k => norm.includes(k))) return c.id
+    if (c.keys.some(k => norm.includes(k))) {
+      // If we have known sections and our heuristic guess isn't one of them,
+      // fall back to the first known section so questions don't disappear.
+      if (knownSectionIds && !knownSectionIds.has(c.id)) continue
+      return c.id
+    }
+  }
+  // Final fallback: if survey has sections defined, use the first one.
+  if (knownSectionIds && knownSectionIds.size > 0) {
+    return Array.from(knownSectionIds)[0]
   }
   return 'algemeen'
 }
 
 /** Convert a DB SurveyQuestion into the UI `Question` shape, picking the
  *  correct language for text/helper/labels/options. */
-export function surveyQuestionToUi(sq: SurveyQuestion, lang: 'nl' | 'en', number: number): Question {
+export function surveyQuestionToUi(
+  sq: SurveyQuestion,
+  lang: 'nl' | 'en',
+  number: number,
+  knownSectionIds?: ReadonlySet<string>,
+): Question {
   const label = (lang === 'en' ? sq.label_en : sq.label_nl) || sq.label_nl || sq.label_en || sq.code
   const helper = (lang === 'en' ? sq.helper_en : sq.helper_nl) || undefined
   const required = sq.required === 1
-  const sectionId = categoryToSectionId(sq.category)
+  const sectionId = categoryToSectionId(sq.category, knownSectionIds)
 
   // DB `nps` type maps to UI `scale` with min/max 0–10
   if (sq.type === 'nps' || sq.type === 'scale') {
@@ -268,6 +292,10 @@ export function surveyQuestionToUi(sq: SurveyQuestion, lang: 'nl' | 'en', number
 
 /** Build the runtime list of UI Questions from a list of DB snapshots.
  *  Numbering follows display_order (already sorted by the caller). */
-export function surveyQuestionsToUi(snapshots: SurveyQuestion[], lang: 'nl' | 'en'): Question[] {
-  return snapshots.map((sq, idx) => surveyQuestionToUi(sq, lang, idx + 1))
+export function surveyQuestionsToUi(
+  snapshots: SurveyQuestion[],
+  lang: 'nl' | 'en',
+  knownSectionIds?: ReadonlySet<string>,
+): Question[] {
+  return snapshots.map((sq, idx) => surveyQuestionToUi(sq, lang, idx + 1, knownSectionIds))
 }

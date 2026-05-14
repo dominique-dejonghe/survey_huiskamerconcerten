@@ -224,8 +224,13 @@ export const SurveyPage: FC<{
   //  - Otherwise fall back to the hardcoded QUESTIONS (legacy code paths,
   //    e.g. server-side rendering without a survey context).
   const fromSnapshot = Array.isArray(surveyQuestions) && surveyQuestions.length > 0
+  // Build the set of section_ids the survey actually knows about — used to
+  // resolve a question's category to its proper section (incl. custom ones).
+  const knownSectionIds = new Set(
+    (surveySections || []).map(s => s.section_id.toLowerCase()),
+  )
   const filtered: Question[] = fromSnapshot
-    ? surveyQuestionsToUi(surveyQuestions!, lang)
+    ? surveyQuestionsToUi(surveyQuestions!, lang, knownSectionIds.size > 0 ? knownSectionIds : undefined)
     : (() => {
         const wanted = survey?.question_codes ?? null
         return wanted ? QUESTIONS.filter(q => wanted.includes(q.id)) : QUESTIONS
@@ -252,10 +257,10 @@ export const SurveyPage: FC<{
   // Catch-all for questions whose section_id isn't in the survey's section list
   // (e.g. orphan question after a section was deleted, or legacy data) — render
   // them under the first section so they aren't silently lost.
-  const knownSectionIds = new Set(sections.map(s => s.id))
+  const renderableSectionIds = new Set(sections.map(s => s.id))
   const orphanQuestions: Question[] = []
   for (const sid of Object.keys(grouped)) {
-    if (!knownSectionIds.has(sid)) {
+    if (!renderableSectionIds.has(sid)) {
       orphanQuestions.push(...grouped[sid])
       delete grouped[sid]
     }

@@ -863,10 +863,12 @@ export const EditSurveyPage: FC<{
           {surveySections.length === 0 ? (
             <p class="form-empty">Nog geen hoofdstukken. Voeg er één toe hierboven.</p>
           ) : (
-            <div class="survey-section-list">
+            <div class="survey-section-list" id="surveySectionList"
+              data-reorder-url={`/admin/surveys/${survey.id}/sections/reorder`}>
               {surveySections.map((s, idx) => (
                 <details class="survey-section-row" data-section-id={s.section_id}>
                   <summary>
+                    <span class="drag-handle ss-drag" title="Sleep om volgorde te wijzigen" aria-label="Versleep">⋮⋮</span>
                     <span class="ss-order">{idx + 1}.</span>
                     <span class="ss-id">{s.section_id}</span>
                     <span class="ss-main">
@@ -947,36 +949,86 @@ export const EditSurveyPage: FC<{
 
           {surveyQuestions.length === 0 ? (
             <p class="form-empty">Deze enquête heeft nog geen vragen. Voeg er een toe met één van de knoppen hierboven.</p>
-          ) : (
-            <div class="survey-question-list">
-              {surveyQuestions.map((q, idx) => (
-                <div class="survey-question-row" data-code={q.code} data-order={String(q.display_order)}>
-                  <span class="sq-order">{idx + 1}.</span>
-                  <span class="sq-code">{q.code}</span>
-                  <div class="sq-main">
-                    <span class="sq-label">{q.label_nl}</span>
-                    <span class="sq-meta">
-                      {q.type}{q.required ? ' · verplicht' : ''}
-                      {q.source_code ? ` · uit bibliotheek (${q.source_code})` : ' · enquête-eigen'}
-                    </span>
-                  </div>
-                  <div class="sq-actions">
-                    <a href={`/admin/surveys/${survey.id}/questions/${q.code}/edit`}
-                       class="btn btn-ghost btn-tiny" title="Bewerk deze vraag (alleen voor deze enquête)">
-                      ✏️ Bewerk
-                    </a>
-                    <form method="POST" action={`/admin/surveys/${survey.id}/questions/${q.code}/delete`}
-                      class="inline-form delete-sq-form">
-                      <button type="submit" class="btn btn-ghost btn-tiny btn-red-text"
-                        title="Verwijder deze vraag uit deze enquête">
-                        🗑
-                      </button>
-                    </form>
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
+          ) : (() => {
+            // ── Group questions per section, in the order the sections themselves
+            // appear, with a fallback bucket for orphans (category not matching
+            // any known section). Render each section as its own Sortable group;
+            // SortableJS will be wired up to allow drag between groups.
+            const sectionList = surveySections.length > 0
+              ? surveySections
+              : [{ section_id: 'algemeen', title_nl: 'Algemeen', subtitle_nl: '', title_en: '', subtitle_en: '', display_order: 0, survey_id: survey.id, created_at: '', updated_at: '' }]
+            const knownIds = new Set(sectionList.map(s => s.section_id.toLowerCase()))
+            const bucketed = new Map<string, typeof surveyQuestions>()
+            for (const s of sectionList) bucketed.set(s.section_id, [])
+            const orphans: typeof surveyQuestions = []
+            for (const q of surveyQuestions) {
+              const catNorm = (q.category || '').toLowerCase().trim()
+              if (catNorm && knownIds.has(catNorm)) {
+                bucketed.get(catNorm)!.push(q)
+              } else {
+                // legacy heuristic: try substring match against known section_ids
+                const hit = sectionList.find(s =>
+                  catNorm && (catNorm.includes(s.section_id) || s.section_id.includes(catNorm)),
+                )
+                if (hit) bucketed.get(hit.section_id)!.push(q)
+                else orphans.push(q)
+              }
+            }
+            // Orphans land in the first section so they remain visible.
+            if (orphans.length > 0 && sectionList.length > 0) {
+              const first = sectionList[0].section_id
+              bucketed.set(first, [...(bucketed.get(first) || []), ...orphans])
+            }
+            let runningNum = 0
+            return (
+              <div class="survey-question-groups" id="surveyQuestionGroups"
+                data-reorder-url={`/admin/surveys/${survey.id}/questions/reorder`}>
+                {sectionList.map(s => {
+                  const list = bucketed.get(s.section_id) || []
+                  return (
+                    <div class="sq-group" data-section-id={s.section_id}>
+                      <div class="sq-group-header">
+                        <span class="sq-group-badge">{s.title_nl}</span>
+                        {s.subtitle_nl ? <span class="sq-group-title">{s.subtitle_nl}</span> : null}
+                      </div>
+                      <div class="sq-group-list" data-section-id={s.section_id}>
+                        {list.map(q => {
+                          runningNum++
+                          return (
+                            <div class="survey-question-row" data-code={q.code} data-order={String(q.display_order)}>
+                              <span class="drag-handle sq-drag" title="Sleep om volgorde of sectie te wijzigen" aria-label="Versleep">⋮⋮</span>
+                              <span class="sq-order">{runningNum}.</span>
+                              <span class="sq-code">{q.code}</span>
+                              <div class="sq-main">
+                                <span class="sq-label">{q.label_nl}</span>
+                                <span class="sq-meta">
+                                  {q.type}{q.required ? ' · verplicht' : ''}
+                                  {q.source_code ? ` · uit bibliotheek (${q.source_code})` : ' · enquête-eigen'}
+                                </span>
+                              </div>
+                              <div class="sq-actions">
+                                <a href={`/admin/surveys/${survey.id}/questions/${q.code}/edit`}
+                                   class="btn btn-ghost btn-tiny" title="Bewerk deze vraag (alleen voor deze enquête)">
+                                  ✏️ Bewerk
+                                </a>
+                                <form method="POST" action={`/admin/surveys/${survey.id}/questions/${q.code}/delete`}
+                                  class="inline-form delete-sq-form">
+                                  <button type="submit" class="btn btn-ghost btn-tiny btn-red-text"
+                                    title="Verwijder deze vraag uit deze enquête">
+                                    🗑
+                                  </button>
+                                </form>
+                              </div>
+                            </div>
+                          )
+                        })}
+                      </div>
+                    </div>
+                  )
+                })}
+              </div>
+            )
+          })()}
         </section>
 
         {/* ───────── Danger zone — duplicate / delete (separate mini-forms, OUTSIDE main form) ───────── */}
@@ -1003,8 +1055,10 @@ export const EditSurveyPage: FC<{
         </section>
       </main>
 
+      <script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.2/Sortable.min.js" defer></script>
       <script src={v('/static/admin-new-survey.js')} defer></script>
       <script src={v('/static/admin-survey-edit.js')} defer></script>
+      <script src={v('/static/admin-drag-drop.js')} defer></script>
     </Layout>
   )
 }
