@@ -120,6 +120,24 @@ app.get('/health', (c) => c.json({ ok: true, ts: new Date().toISOString() }))
 // ============================================================
 // PUBLIC SURVEY ROUTES — /h/:slug and /e/:slug (NL + EN)
 // ============================================================
+/**
+ * Cache-Control headers for public survey HTML.
+ *
+ * Survey questions / wording can change at any moment from the admin. We
+ * absolutely cannot let browsers or intermediaries cache a stale version of
+ * the rendered HTML — otherwise an admin edit will only become visible to
+ * visitors after their browser cache eventually expires (which can be hours
+ * or days). So we explicitly forbid all caching here.
+ *
+ * Note: static assets under /static/* still use ASSET_VERSION cache busting
+ * and remain aggressively cacheable, which is what we want for JS/CSS/fonts.
+ */
+function setNoCacheHeaders(c: any) {
+  c.header('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0')
+  c.header('Pragma', 'no-cache')
+  c.header('Expires', '0')
+}
+
 async function renderSurveyForSlug(c: any, prefix: string, slug: string, lang: Lang) {
   const brand = await getBrandByPrefix(c.env.DB, prefix)
   if (!brand) return c.notFound()
@@ -133,6 +151,7 @@ async function renderSurveyForSlug(c: any, prefix: string, slug: string, lang: L
   // This is the whole point of the snapshot refactor: each survey lives its
   // own life, edits to the library never propagate retroactively.
   const surveyQuestions = await listSurveyQuestions(c.env.DB, survey.id)
+  setNoCacheHeaders(c)
   return c.html(
     <SurveyPage lang={lang} brand={brand} survey={survey} surveyQuestions={surveyQuestions} />
   )
