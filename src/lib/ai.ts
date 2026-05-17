@@ -1,8 +1,15 @@
-// AI-driven survey analysis via Cloudflare Workers AI (Llama 3.3 70B)
-// Produces structured JSON in NL or EN.
+// AI-driven survey analysis via OpenAI (primary) → Cloudflare Workers AI (fallback).
+//
+// Sinds 2026-05 is dit volledig survey-aware: digest, prompt en context worden
+// opgebouwd uit de per-survey vragen-snapshot (survey_questions) i.p.v. uit
+// hard-coded Reeks-I codes. De prompt-tekst spreekt nu over "deze concertformule"
+// en gebruikt indien beschikbaar de survey-titel / brand-context, zodat de AI
+// niet meer halsstarrig over "Huiskamerconcerten Reeks I" gaat schrijven als de
+// data over Ebdiep gaat.
 
 import type { ResponseRow } from './db'
 import type { Lang } from './i18n'
+import type { SurveyQuestion } from './surveys'
 
 export type AnalysisResult = {
   generated_at: string
@@ -12,6 +19,9 @@ export type AnalysisResult = {
   samenvatting: string                     // 1-paragraph general tendency
   sterke_punten: { punt: string; bewijs: string }[]   // 3-5 items
   verbeterpunten: { punt: string; bewijs: string }[]  // 3-5 items
+  // NB: veldnaam blijft `suggesties_reeks2` voor backwards-compat met cached records.
+  // Inhoudelijk gaan deze suggesties over "de volgende editie van deze concertformule"
+  // (niet specifiek Reeks II).
   suggesties_reeks2: { titel: string; beschrijving: string }[] // 5-8 actionable
   citaten: { vraag: string; tekst: string; sentiment: 'positief' | 'neutraal' | 'kritisch' }[]
 }
@@ -23,72 +33,216 @@ type Bindings = {
   OPENAI_MODEL?: string
 }
 
-// ---- Build a compact, structured digest of all responses ----
-function buildDigest(rows: ResponseRow[]): string {
+/** Lichte context over de survey, gebruikt om de prompt te personaliseren. */
+export type SurveyContext = {
+  title_nl?: string | null
+  title_en?: string | null
+  series_name?: string | null
+  brand_id?: string | null
+  artist?: string | null
+  location?: string | null
+}
+
+// ────────────────────────────────────────────────────────────
+// Survey-aware helpers
+// ────────────────────────────────────────────────────────────
+
+function parseAnswers(row: ResponseRow): Record<string, unknown> {
+  if (!row.answers_json) return {}
+  try {
+    const o = JSON.parse(row.answers_json)
+    return o && typeof o === 'object' && !Array.isArray(o) ? o : {}
+  } catch { return {} }
+}
+
+/** answers_json > legacy q* kolom — zelfde fallback als stats/csv. */
+function getAnswer(row: ResponseRow, code: string, parsed?: Record<string, unknown>): unknown {
+  const a = parsed ?? parseAnswers(row)
+  if (Object.prototype.hasOwnProperty.call(a, code)) {
+    const v = a[code]
+    if (v === null || v === undefined) return undefined
+    if (typeof v === 'string' && v.trim() === '') return undefined
+    return v
+  }
+  if (code in row) {
+    const v = (row as unknown as Record<string, unknown>)[code]
+    if (v === null || v === undefined) return undefined
+    if (typeof v === 'string' && v.trim() === '') return undefined
+    return v
+  }
+  return undefined
+}
+
+function toNumber(v: unknown): number | null {
+  if (v === null || v === undefined || v === '') return null
+  if (typeof v === 'number') return Number.isFinite(v) ? v : null
+  const n = parseFloat(String(v))
+  return Number.isFinite(n) ? n : null
+}
+
+// ────────────────────────────────────────────────────────────
+// Digest-bouwer — survey-aware
+// ────────────────────────────────────────────────────────────
+
+/**
+ * Bouw een compacte, gestructureerde samenvatting van alle responses,
+ * gebruikmakend van de vragen-snapshot om zelf te bepalen welke vragen er
+ * bestaan, welke schaal ze hebben en welke labels we tonen.
+ *
+ * Volgorde van blocks:
+ *  1. Aantal responses
+ *  2. NPS-cijfers (als er een nps-vraag is)
+ *  3. Gemiddelden voor alle scale-vragen
+ *  4. Choice-verdelingen per choice-vraag
+ *  5. Open antwoorden, gegroepeerd per text/paragraph-vraag (max 12 citaten)
+ */
+function buildDigest(
+  rows: ResponseRow[],
+  questions: SurveyQuestion[],
+  ctx?: SurveyContext,
+): string {
   if (rows.length === 0) return 'Geen antwoorden beschikbaar.'
 
   const n = rows.length
-  const npsScores = rows.map(r => r.q1_nps).filter(v => typeof v === 'number')
-  const promotors = npsScores.filter(v => v >= 9).length
-  const passives  = npsScores.filter(v => v >= 7 && v <= 8).length
-  const detractors = npsScores.filter(v => v <= 6).length
-  const nps = npsScores.length === 0 ? 0 : Math.round(((promotors / npsScores.length) - (detractors / npsScores.length)) * 100)
+  const parsedRows = rows.map(parseAnswers)
+  const blocks: string[] = []
 
-  const avg = (key: keyof ResponseRow) => {
-    const vals = rows.map(r => r[key]).filter(v => typeof v === 'number') as number[]
-    return vals.length === 0 ? 0 : Math.round((vals.reduce((a, b) => a + b, 0) / vals.length) * 10) / 10
+  // ── Context-header ──
+  if (ctx) {
+    const bits: string[] = []
+    if (ctx.title_nl) bits.push(`titel="${ctx.title_nl}"`)
+    if (ctx.artist) bits.push(`artiest="${ctx.artist}"`)
+    if (ctx.location) bits.push(`locatie="${ctx.location}"`)
+    if (ctx.brand_id) bits.push(`brand=${ctx.brand_id}`)
+    if (bits.length) blocks.push(`Context: ${bits.join(', ')}`)
   }
 
-  const aantal: Record<string, number> = {}
-  rows.forEach(r => { if (r.q3_aantal) aantal[r.q3_aantal] = (aantal[r.q3_aantal] || 0) + 1 })
-
-  // Collect open answers per question, truncated to 240 chars each
-  const collectOpen = (key: keyof ResponseRow): string[] =>
-    rows
-      .map(r => r[key])
-      .filter((v): v is string => typeof v === 'string' && v.trim().length > 0)
-      .map(s => s.trim().replace(/\s+/g, ' ').slice(0, 240))
-
-  const blocks: string[] = []
   blocks.push(`Aantal responses: ${n}`)
-  blocks.push(`NPS: ${nps} (promotors=${promotors}, passives=${passives}, detractors=${detractors})`)
-  blocks.push(`Gemiddelden (1-5 schaal): sfeer=${avg('q4_sfeer')}, akoestiek=${avg('q6_akoestiek')}, repertoire=${avg('q8_repertoire')}, interactie=${avg('q10_interactie')}, communicatie=${avg('q12_communic')}, bijdrage=${avg('q14_bijdrage')}`)
-  blocks.push(`Concertbezoek: ${Object.entries(aantal).map(([k, v]) => `${k}=${v}`).join(', ')}`)
 
-  const openMap: { label: string; key: keyof ResponseRow }[] = [
-    { label: 'Q2 wat blijft bij',        key: 'q2_blijft_bij' },
-    { label: 'Q5 sfeer toelichting',     key: 'q5_sfeer_open' },
-    { label: 'Q7 fortepiano',            key: 'q7_fortepiano' },
-    { label: 'Q9 favoriet concert',      key: 'q9_favoriet' },
-    { label: 'Q11 ruimte voor gesprek',  key: 'q11_gesprek' },
-    { label: 'Q13 catering/receptie',    key: 'q13_catering' },
-    { label: 'Q15 wensen Reeks II',      key: 'q15_wensen_2' },
-    { label: 'Q16 gewenste gasten',      key: 'q16_gasten' },
-    { label: 'Q17 wat zou je terug brengen', key: 'q17_terugkomen' },
-    { label: 'Q18 overige',              key: 'q18_overige' },
-  ]
+  // ── NPS-blok ──
+  const npsQ = questions.find(q => q.type === 'nps')
+  if (npsQ) {
+    const min = npsQ.scale_min ?? 0
+    const max = npsQ.scale_max ?? 10
+    const values: number[] = []
+    rows.forEach((r, i) => {
+      const v = toNumber(getAnswer(r, npsQ.code, parsedRows[i]))
+      if (v != null) values.push(v)
+    })
+    let prom = 0, pas = 0, det = 0
+    for (const v of values) {
+      if (max - min === 10) {
+        if (v >= 9) prom++; else if (v >= 7) pas++; else det++
+      } else {
+        const range = max - min
+        if (v >= min + range * 0.8) prom++
+        else if (v >= min + range * 0.6) pas++
+        else det++
+      }
+    }
+    const nps = values.length === 0
+      ? 0
+      : Math.round(((prom / values.length) - (det / values.length)) * 100)
+    blocks.push(
+      `NPS (${npsQ.code} · ${npsQ.label_nl}): ${nps} ` +
+      `(promotors=${prom}, passives=${pas}, detractors=${det}, schaal=${min}-${max})`
+    )
+  }
 
-  for (const { label, key } of openMap) {
-    const items = collectOpen(key)
+  // ── Schaalgemiddelden ──
+  const scaleLines: string[] = []
+  for (const q of questions) {
+    if (q.type !== 'scale') continue
+    const vals: number[] = []
+    rows.forEach((r, i) => {
+      const v = toNumber(getAnswer(r, q.code, parsedRows[i]))
+      if (v != null) vals.push(v)
+    })
+    if (vals.length === 0) {
+      scaleLines.push(`${q.code}=geen antwoorden`)
+      continue
+    }
+    const avg = Math.round((vals.reduce((a, b) => a + b, 0) / vals.length) * 10) / 10
+    const max = q.scale_max ?? 5
+    scaleLines.push(`${q.code}(${q.label_nl})=${avg}/${max} (n=${vals.length})`)
+  }
+  if (scaleLines.length) {
+    blocks.push(`Schaalgemiddelden:\n  ${scaleLines.join('\n  ')}`)
+  }
+
+  // ── Choice-verdelingen ──
+  for (const q of questions) {
+    if (q.type !== 'choice') continue
+    const tally: Record<string, number> = {}
+    rows.forEach((r, i) => {
+      const v = getAnswer(r, q.code, parsedRows[i])
+      if (v == null) return
+      const s = String(v)
+      tally[s] = (tally[s] || 0) + 1
+    })
+    const entries = Object.entries(tally)
+    if (entries.length === 0) continue
+    const summary = entries.map(([k, v]) => `${k}=${v}`).join(', ')
+    blocks.push(`${q.code} (${q.label_nl}): ${summary}`)
+  }
+
+  // ── Open antwoorden ──
+  for (const q of questions) {
+    if (q.type !== 'text' && q.type !== 'paragraph') continue
+    // Skip text-vragen die typisch een naam zijn — die hebben geen analytische waarde
+    if (/naam|name|email/i.test(q.code)) continue
+    const items: string[] = []
+    rows.forEach((r, i) => {
+      const v = getAnswer(r, q.code, parsedRows[i])
+      if (typeof v !== 'string') return
+      const t = v.trim().replace(/\s+/g, ' ')
+      if (t.length === 0) return
+      items.push(t.slice(0, 240))
+    })
     if (items.length === 0) continue
-    blocks.push(`\n${label} (${items.length} antwoorden):`)
-    // Limit to 12 quotes per question to keep prompt small
+    blocks.push(`\n${q.code.toUpperCase()} — ${q.label_nl} (${items.length} antwoorden):`)
+    // Beperk tot 12 citaten per vraag om prompt-grootte onder controle te houden
     items.slice(0, 12).forEach((q, i) => blocks.push(`  ${i + 1}. "${q}"`))
   }
 
   return blocks.join('\n')
 }
 
-// ---- Prompts ----
-const PROMPTS = {
-  nl: {
-    system: `Je bent een ervaren cultureel adviseur die Nederlandse surveys analyseert voor een klassiek-muziek-vereniging.
+// ────────────────────────────────────────────────────────────
+// Prompts — survey-bewust (geen "Reeks I / Jos van Immerseel" meer hardcoded)
+// ────────────────────────────────────────────────────────────
+
+function contextLineNL(ctx?: SurveyContext): string {
+  if (!ctx) return 'klassieke-muziek-concertformule'
+  const parts: string[] = []
+  if (ctx.title_nl) parts.push(`"${ctx.title_nl}"`)
+  if (ctx.artist) parts.push(`met ${ctx.artist}`)
+  if (ctx.location) parts.push(`in ${ctx.location}`)
+  return parts.length ? parts.join(' ') : 'deze concertformule'
+}
+
+function contextLineEN(ctx?: SurveyContext): string {
+  if (!ctx) return 'classical music concert series'
+  const parts: string[] = []
+  if (ctx.title_en || ctx.title_nl) parts.push(`"${ctx.title_en || ctx.title_nl}"`)
+  if (ctx.artist) parts.push(`with ${ctx.artist}`)
+  if (ctx.location) parts.push(`at ${ctx.location}`)
+  return parts.length ? parts.join(' ') : 'this concert format'
+}
+
+function buildPrompts(ctx?: SurveyContext) {
+  const nlSubject = contextLineNL(ctx)
+  const enSubject = contextLineEN(ctx)
+  return {
+    nl: {
+      system: `Je bent een ervaren cultureel adviseur die Nederlandse surveys analyseert voor een klassiek-muziek-organisatie.
 Je antwoordt UITSLUITEND met geldige JSON volgens het exacte schema dat de gebruiker meegeeft.
 Geen extra tekst, geen markdown-blokken, geen toelichting buiten het JSON-object.
 Schrijf in het Nederlands, in een warm-persoonlijke maar zakelijke toon (zoals een verfijnd cultureel verslag).
 Citeer ALTIJD letterlijk uit de antwoorden — verzin nooit citaten.
-Wees concreet en actiegericht; vermijd cliché-taal als "het was een fantastische ervaring".`,
-    user: (digest: string) => `Hieronder een samenvatting van alle survey-antwoorden over de Huiskamerconcerten Reeks I (Jos van Immerseel + Ayako Ito, fortepiano).
+Wees concreet en actiegericht; vermijd cliché-taal als "het was een fantastische ervaring".
+BELANGRIJK: baseer je conclusies UITSLUITEND op de data in de DATA-sectie. Refereer alleen aan vragen/cijfers/citaten die daar daadwerkelijk staan — verzin geen vragen die er niet zijn.`,
+      user: (digest: string) => `Hieronder een samenvatting van alle survey-antwoorden over ${nlSubject}.
 
 DATA:
 ${digest}
@@ -103,7 +257,7 @@ Lever JSON met deze EXACTE structuur (geen extra velden):
     { "punt": "Korte titel", "bewijs": "Cijferonderbouwing of letterlijk citaat." }
   ],
   "suggesties_reeks2": [
-    { "titel": "Concrete actie in 4-7 woorden", "beschrijving": "1-2 zinnen waarom + hoe uit te voeren." }
+    { "titel": "Concrete actie in 4-7 woorden", "beschrijving": "1-2 zinnen waarom + hoe uit te voeren voor de volgende editie van deze concertformule." }
   ],
   "citaten": [
     { "vraag": "Q5", "tekst": "letterlijk citaat", "sentiment": "positief" }
@@ -115,16 +269,18 @@ Regels:
 - 6 à 10 citaten, gebalanceerd: minstens 2 positief, 2 kritisch, 2 neutraal indien beschikbaar.
 - sentiment is exact één van: "positief", "neutraal", "kritisch".
 - Schrijf ALLES in het Nederlands.
+- Gebruik in citaten het vraag-veld zoals het in DATA verschijnt (bv. "Q5_SFEER_OPEN" of "Q14_BIJDRAGE").
 - Antwoord UITSLUITEND met het JSON-object, niets ervoor of erna.`,
-  },
-  en: {
-    system: `You are an experienced cultural consultant who analyses surveys for a classical-music association.
+    },
+    en: {
+      system: `You are an experienced cultural consultant who analyses surveys for a classical-music organisation.
 You respond EXCLUSIVELY with valid JSON matching the exact schema the user provides.
 No extra text, no markdown fences, no explanation outside the JSON object.
 Write in English, in a warm-personal yet professional tone (like a refined cultural report).
 ALWAYS quote answers verbatim — never invent quotes.
-Be concrete and actionable; avoid cliché phrases like "it was a fantastic experience".`,
-    user: (digest: string) => `Below is a digest of all survey responses about the House Concerts Series I (Jos van Immerseel + Ayako Ito, fortepiano).
+Be concrete and actionable; avoid cliché phrases like "it was a fantastic experience".
+IMPORTANT: base conclusions EXCLUSIVELY on the data in the DATA section. Only reference questions/figures/quotes that actually appear there — never fabricate questions that aren't present.`,
+      user: (digest: string) => `Below is a digest of all survey responses about ${enSubject}.
 
 DATA:
 ${digest}
@@ -139,7 +295,7 @@ Return JSON with this EXACT structure (no extra fields):
     { "punt": "Short title", "bewijs": "Numerical evidence or verbatim quote." }
   ],
   "suggesties_reeks2": [
-    { "titel": "Concrete action in 4-7 words", "beschrijving": "1-2 sentences why + how to execute." }
+    { "titel": "Concrete action in 4-7 words", "beschrijving": "1-2 sentences why + how to execute for the next edition of this concert format." }
   ],
   "citaten": [
     { "vraag": "Q5", "tekst": "verbatim quote (translate Dutch quotes to English in parentheses if needed)", "sentiment": "positief" }
@@ -151,11 +307,16 @@ Rules:
 - 6 to 10 citaten, balanced: at least 2 positive, 2 critical, 2 neutral if available.
 - sentiment is exactly one of: "positief", "neutraal", "kritisch" (we keep the Dutch labels for consistency with the data model).
 - Write ALL content in English.
+- Use the question codes from DATA in the "vraag" field (e.g. "Q5_SFEER_OPEN" or "Q14_BIJDRAGE").
 - Respond ONLY with the JSON object, nothing before or after.`,
-  },
+    },
+  }
 }
 
-// ---- Helper: try to extract a JSON object from a possibly noisy LLM string ----
+// ────────────────────────────────────────────────────────────
+// JSON extract / repair helpers (ongewijzigd — best-effort parser voor LLM output)
+// ────────────────────────────────────────────────────────────
+
 function extractJson(raw: string): any | null {
   if (!raw) return null
 
@@ -176,8 +337,7 @@ function extractJson(raw: string): any | null {
     try { return JSON.parse(candidate) } catch {}
   }
 
-  // 4. Repair truncated JSON (common when max_tokens too low):
-  //    walk from first '{' tracking braces/brackets/strings, then close gracefully.
+  // 4. Repair truncated JSON
   if (first >= 0) {
     const repaired = repairTruncatedJson(raw.slice(first))
     if (repaired) {
@@ -206,11 +366,8 @@ function repairTruncatedJson(s: string): string | null {
     else if (c === ']') { if (stack[stack.length - 1] === '[') stack.pop(); if (stack.length === 0) lastValidEnd = i }
   }
 
-  // If we have a complete top-level object somewhere, take that
   if (lastValidEnd > 0) return s.slice(0, lastValidEnd + 1)
 
-  // Otherwise: truncate at last sensible position and close brackets
-  // Find last comma or '{' or '[' that is NOT inside a string, then truncate there
   let truncatePos = s.length
   inString = false
   escape = false
@@ -226,14 +383,10 @@ function repairTruncatedJson(s: string): string | null {
     else if (c === '}' || c === ']') stack2.pop()
     if (!inString && (c === ',' || c === '}' || c === ']')) lastSafe = i
   }
-  if (lastSafe > 0) truncatePos = lastSafe // include up to and incl this char
+  if (lastSafe > 0) truncatePos = lastSafe
   let body = s.slice(0, truncatePos + 1)
-
-  // If we ended with a comma, drop it
   body = body.replace(/,\s*$/, '')
 
-  // Close any open strings (we should not normally cut inside a string,
-  // but be safe: check if number of unescaped quotes is odd)
   let q = 0; let esc = false
   for (let i = 0; i < body.length; i++) {
     if (esc) { esc = false; continue }
@@ -242,7 +395,6 @@ function repairTruncatedJson(s: string): string | null {
   }
   if (q % 2 !== 0) body += '"'
 
-  // Close remaining open brackets
   const openStack: string[] = []
   inString = false
   escape = false
@@ -263,12 +415,20 @@ function repairTruncatedJson(s: string): string | null {
   return body
 }
 
-// ---- Provider: OpenAI (primary, fast) ----
-async function callOpenAI(env: Bindings, lang: Lang, digest: string): Promise<{ json: any; provider: string }> {
+// ────────────────────────────────────────────────────────────
+// Providers
+// ────────────────────────────────────────────────────────────
+
+async function callOpenAI(
+  env: Bindings,
+  lang: Lang,
+  digest: string,
+  ctx?: SurveyContext,
+): Promise<{ json: any; provider: string }> {
   const apiKey = env.OPENAI_API_KEY
   if (!apiKey) throw new Error('OPENAI_API_KEY not configured')
   const model = env.OPENAI_MODEL || 'gpt-4o-mini'
-  const p = PROMPTS[lang]
+  const p = buildPrompts(ctx)[lang]
 
   const res = await fetch('https://api.openai.com/v1/chat/completions', {
     method: 'POST',
@@ -282,7 +442,7 @@ async function callOpenAI(env: Bindings, lang: Lang, digest: string): Promise<{ 
         { role: 'system', content: p.system },
         { role: 'user',   content: p.user(digest) },
       ],
-      response_format: { type: 'json_object' }, // forces valid JSON output
+      response_format: { type: 'json_object' },
       temperature: 0.3,
       max_tokens: 4096,
     }),
@@ -301,9 +461,13 @@ async function callOpenAI(env: Bindings, lang: Lang, digest: string): Promise<{ 
   return { json, provider: `openai:${model}` }
 }
 
-// ---- Provider: Cloudflare Workers AI (fallback, free) ----
-async function callWorkersAI(env: Bindings, lang: Lang, digest: string): Promise<{ json: any; provider: string }> {
-  const p = PROMPTS[lang]
+async function callWorkersAI(
+  env: Bindings,
+  lang: Lang,
+  digest: string,
+  ctx?: SurveyContext,
+): Promise<{ json: any; provider: string }> {
+  const p = buildPrompts(ctx)[lang]
   const models = ['@cf/meta/llama-3.3-70b-instruct-fp8-fast', '@cf/meta/llama-3.1-70b-instruct']
   let lastError: any = null
   for (const model of models) {
@@ -329,18 +493,32 @@ async function callWorkersAI(env: Bindings, lang: Lang, digest: string): Promise
   throw lastError ?? new Error('Workers AI failed')
 }
 
-// ---- Main entry: try OpenAI → fall back to Workers AI ----
+// ────────────────────────────────────────────────────────────
+// Main entry
+// ────────────────────────────────────────────────────────────
+
+/**
+ * Genereer analyse voor één survey.
+ *
+ * @param env       Cloudflare bindings (AI, DB, OPENAI_API_KEY, OPENAI_MODEL)
+ * @param rows      antwoord-rijen voor deze survey
+ * @param lang      'nl' | 'en'
+ * @param questions vragen-snapshot (survey_questions, in display order)
+ * @param ctx       optionele survey-context (titel, artiest, locatie, brand)
+ */
 export async function generateAnalysis(
   env: Bindings,
   rows: ResponseRow[],
   lang: Lang,
+  questions: SurveyQuestion[] = [],
+  ctx?: SurveyContext,
 ): Promise<AnalysisResult> {
-  const digest = buildDigest(rows)
+  const digest = buildDigest(rows, questions, ctx)
 
-  // Primary: OpenAI (fast, ~8s, costs ~€0.002 per call)
+  // Primary: OpenAI
   if (env.OPENAI_API_KEY) {
     try {
-      const { json, provider } = await callOpenAI(env, lang, digest)
+      const { json, provider } = await callOpenAI(env, lang, digest, ctx)
       const result = normalise(json, rows.length, lang)
       result.provider = provider
       return result
@@ -349,8 +527,8 @@ export async function generateAnalysis(
     }
   }
 
-  // Fallback: Cloudflare Workers AI (free, ~90s)
-  const { json, provider } = await callWorkersAI(env, lang, digest)
+  // Fallback: Cloudflare Workers AI
+  const { json, provider } = await callWorkersAI(env, lang, digest, ctx)
   const result = normalise(json, rows.length, lang)
   result.provider = provider
   return result
@@ -390,7 +568,10 @@ function normalise(j: any, count: number, lang: Lang): AnalysisResult {
   }
 }
 
-// ---- Cache helpers (24h TTL, per-lang row in analysis_cache) ----
+// ────────────────────────────────────────────────────────────
+// Cache helpers (24h TTL, per-survey × lang in analysis_cache)
+// ────────────────────────────────────────────────────────────
+
 const CACHE_TTL_MS = 24 * 60 * 60 * 1000
 
 export async function getCachedAnalysis(
@@ -403,7 +584,6 @@ export async function getCachedAnalysis(
     .bind(surveyId, lang)
     .first<{ generated_at: string; response_count: number; payload: string }>()
   if (!row) return null
-  // SQLite returns "YYYY-MM-DD HH:MM:SS" UTC — parse safely
   const ts = Date.parse(row.generated_at.replace(' ', 'T') + 'Z')
   if (Number.isFinite(ts) && Date.now() - ts > CACHE_TTL_MS) return null
   try {

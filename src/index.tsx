@@ -1349,7 +1349,10 @@ app.get('/api/admin/export', async (c) => {
 
   const lang: Lang = c.req.query('lang') === 'en' ? 'en' : 'nl'
   const analysis = await getCachedAnalysis(c.env.DB, lang, surveyId)
-  const buffer = await buildSurveyDocx(rows, analysis, lang, survey ?? undefined)
+  // Geef de vragen-snapshot mee zodat het Word-rapport survey-bewust gegenereerd
+  // wordt (KPI's, scores, NPS, choices, open antwoorden, raw-tabel — allemaal
+  // op basis van de actuele survey i.p.v. hard-coded q1..q20).
+  const buffer = await buildSurveyDocx(rows, analysis, lang, survey ?? undefined, questions)
   return new Response(buffer, {
     headers: {
       'Content-Type': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
@@ -1407,7 +1410,15 @@ app.post('/api/admin/analyze', async (c) => {
     if (cached) return c.json({ cached: true, analysis: cached })
   }
 
-  const rows = await listResponses(c.env.DB, surveyId)
+  // Survey-aware AI: laad responses + vragen-snapshot + survey-metadata zodat
+  // generateAnalysis een digest kan bouwen op basis van de werkelijke vraagstructuur
+  // (geen hardcoded q1..q20 referenties meer) en de prompt context heeft over
+  // titel/artiest/locatie i.p.v. altijd over "Reeks I / Immerseel" te spreken.
+  const [rows, questions, survey] = await Promise.all([
+    listResponses(c.env.DB, surveyId),
+    listSurveyQuestions(c.env.DB, surveyId),
+    getSurveyById(c.env.DB, surveyId),
+  ])
   if (rows.length === 0) {
     return c.json({ error: 'no_data', message: 'Geen responses om te analyseren.' }, 400)
   }
@@ -1424,6 +1435,15 @@ app.post('/api/admin/analyze', async (c) => {
       },
       rows,
       lang,
+      questions,
+      survey ? {
+        title_nl: survey.title_nl,
+        title_en: survey.title_en,
+        series_name: survey.series_name,
+        brand_id: survey.brand_id,
+        artist: survey.artist,
+        location: survey.location,
+      } : undefined,
     )
     await saveCachedAnalysis(c.env.DB, lang, result, surveyId)
     await logAudit(c.env.DB, 'ai_analyze', ipHash, { lang, count: rows.length, provider: result.provider, surveyId })

@@ -23,7 +23,7 @@ import {
 } from 'docx'
 import type { ResponseRow } from './db'
 import type { AnalysisResult } from './ai'
-import type { Survey } from './surveys'
+import type { Survey, SurveyQuestion } from './surveys'
 
 type Lang = 'nl' | 'en'
 
@@ -162,46 +162,133 @@ function L(lang: Lang) {
 // ===== Helpers =====
 const round1 = (v: number) => Math.round(v * 10) / 10
 
+// ── Survey-aware answer helpers (sinds 2026-05) ──
+// Identieke logica als in stats.ts / csv.ts / ai.ts — bewust gedupliceerd om
+// cross-imports tussen libs te vermijden in edge-runtime.
+function parseAnswers(row: ResponseRow): Record<string, unknown> {
+  if (!row.answers_json) return {}
+  try {
+    const o = JSON.parse(row.answers_json)
+    return o && typeof o === 'object' && !Array.isArray(o) ? o : {}
+  } catch { return {} }
+}
+
+function getAnswer(row: ResponseRow, code: string, parsed?: Record<string, unknown>): unknown {
+  const a = parsed ?? parseAnswers(row)
+  if (Object.prototype.hasOwnProperty.call(a, code)) {
+    const v = a[code]
+    if (v === null || v === undefined) return undefined
+    if (typeof v === 'string' && v.trim() === '') return undefined
+    return v
+  }
+  if (code in row) {
+    const v = (row as unknown as Record<string, unknown>)[code]
+    if (v === null || v === undefined) return undefined
+    if (typeof v === 'string' && v.trim() === '') return undefined
+    return v
+  }
+  return undefined
+}
+
+function toNumber(v: unknown): number | null {
+  if (v === null || v === undefined || v === '') return null
+  if (typeof v === 'number') return Number.isFinite(v) ? v : null
+  const n = parseFloat(String(v))
+  return Number.isFinite(n) ? n : null
+}
+
+/** Bereken gemiddelde voor een code, gebruikmakend van answers_json + fallback. */
+function avgFor(rows: ResponseRow[], code: string): { value: number; count: number } {
+  const vals: number[] = []
+  for (const r of rows) {
+    const v = toNumber(getAnswer(r, code))
+    if (v != null) vals.push(v)
+  }
+  if (vals.length === 0) return { value: 0, count: 0 }
+  return { value: round1(vals.reduce((a, b) => a + b, 0) / vals.length), count: vals.length }
+}
+
+/** Legacy avg() — alleen nog gebruikt door interne fallbacks. */
 function avg(rows: ResponseRow[], key: keyof ResponseRow): number {
   const vals = rows.map(r => r[key]).filter(v => typeof v === 'number') as number[]
   if (vals.length === 0) return 0
   return round1(vals.reduce((a, b) => a + b, 0) / vals.length)
 }
 
-function npsBreakdown(rows: ResponseRow[]) {
-  const scores = rows.map(r => r.q1_nps).filter(v => typeof v === 'number')
+/**
+ * NPS-berekening uit een dynamische vragen-snapshot.
+ * Zoekt eerst naar een type=nps vraag; valt anders terug op de legacy q1_nps kolom
+ * (zodat oude Reeks-I exports zonder snapshot blijven werken).
+ */
+function npsBreakdown(rows: ResponseRow[], questions: SurveyQuestion[] = []) {
+  const npsQ = questions.find(q => q.type === 'nps')
+  let scores: number[] = []
+  let min = 0, max = 10
+  if (npsQ) {
+    min = npsQ.scale_min ?? 0
+    max = npsQ.scale_max ?? 10
+    for (const r of rows) {
+      const v = toNumber(getAnswer(r, npsQ.code))
+      if (v != null) scores.push(v)
+    }
+  } else {
+    // Legacy fallback (geen survey-snapshot): gebruik q1_nps kolom
+    scores = rows.map(r => (r as any).q1_nps).filter(v => typeof v === 'number') as number[]
+  }
   const total = scores.length || 1
-  const promoters = scores.filter(v => v >= 9).length
-  const passives = scores.filter(v => v >= 7 && v <= 8).length
-  const detractors = scores.filter(v => v <= 6).length
+  let promoters = 0, passives = 0, detractors = 0
+  if (max - min === 10) {
+    promoters  = scores.filter(v => v >= 9).length
+    passives   = scores.filter(v => v >= 7 && v <= 8).length
+    detractors = scores.filter(v => v <= 6).length
+  } else {
+    const range = max - min
+    for (const v of scores) {
+      if (v >= min + range * 0.8) promoters++
+      else if (v >= min + range * 0.6) passives++
+      else detractors++
+    }
+  }
   const nps = scores.length === 0
     ? 0
     : Math.round(((promoters / scores.length) - (detractors / scores.length)) * 100)
-  // Distribution per score 0..10
-  const dist: number[] = Array.from({ length: 11 }, (_, i) => scores.filter(v => v === i).length)
-  return { promoters, passives, detractors, nps, dist, total }
+  // Distribution per score min..max (meestal 0..10 = 11 buckets)
+  const bucketCount = Math.max(1, max - min + 1)
+  const dist: number[] = Array.from(
+    { length: bucketCount },
+    (_, i) => scores.filter(v => Math.round(v) === min + i).length,
+  )
+  return { promoters, passives, detractors, nps, dist, total, min, max, code: npsQ?.code ?? 'q1_nps' }
 }
 
-function attendanceMap(rows: ResponseRow[], lang: Lang): { label: string; count: number }[] {
+/**
+ * Verdeling voor één choice-vraag. Behoudt de oorspronkelijke options-volgorde
+ * uit de snapshot. Geeft lege array terug als er geen antwoorden zijn.
+ */
+function choiceBreakdown(
+  rows: ResponseRow[],
+  q: SurveyQuestion,
+): { label: string; count: number }[] {
   const counts: Record<string, number> = {}
-  rows.forEach(r => { if (r.q3_aantal) counts[r.q3_aantal] = (counts[r.q3_aantal] || 0) + 1 })
-  const labelFor = (k: string) => {
-    if (k === 'alle 6' || k === 'all 6') return lang === 'en' ? 'all 6' : 'alle 6'
-    return k
+  for (const r of rows) {
+    const v = getAnswer(r, q.code)
+    if (v == null) continue
+    const s = String(v)
+    counts[s] = (counts[s] || 0) + 1
   }
-  const ordered = ['1', '2', '3', '4', '5', 'alle 6', 'all 6']
-  const seen = new Set<string>()
   const out: { label: string; count: number }[] = []
-  ordered.forEach(k => {
-    if (counts[k] && !seen.has(k)) {
-      out.push({ label: labelFor(k), count: counts[k] })
-      seen.add(k)
+  const seen = new Set<string>()
+  // Eerst in de option-order van de snapshot (als die bestaat)
+  for (const opt of q.options_nl ?? []) {
+    if (counts[opt]) {
+      out.push({ label: opt, count: counts[opt] })
+      seen.add(opt)
     }
-  })
-  // Append any unexpected keys
-  Object.keys(counts).forEach(k => {
+  }
+  // Daarna eventuele onverwachte waardes (legacy / vrije tekst)
+  for (const k of Object.keys(counts)) {
     if (!seen.has(k)) out.push({ label: k, count: counts[k] })
-  })
+  }
   return out
 }
 
@@ -360,27 +447,70 @@ function buildCover(
   ]
 }
 
-function buildKpiSection(rows: ResponseRow[], lang: Lang, t: ReturnType<typeof L>): (Paragraph | Table)[] {
+/**
+ * Korte label voor KPI-tegels: probeer eerst de Reeks-I i18n strings, anders
+ * truncated label_nl van de vraag. Houdt de output netjes als kolomtitel.
+ */
+function shortKpiLabel(q: SurveyQuestion, lang: Lang, t: ReturnType<typeof L>): string {
+  // Heuristische mapping van bekende codes op de bestaande i18n-strings,
+  // zodat Reeks-I rapporten exact dezelfde KPI-labels behouden als vroeger.
+  const map: Record<string, string> = {
+    q4_sfeer: t.kpiAtmosphere,
+    q6_akoestiek: t.kpiAcoustics,
+    q8_repertoire: t.kpiRepertoire,
+    q10_interactie: t.kpiInteraction,
+    q12_communic: t.kpiComms,
+    q14_bijdrage: t.kpiContribution,
+  }
+  if (map[q.code]) return map[q.code]
+  // Voor onbekende codes: code + verkort label
+  const lbl = (lang === 'en' ? q.label_en : q.label_nl) || q.code
+  const short = lbl.length > 32 ? lbl.slice(0, 29) + '…' : lbl
+  return `${q.code.toUpperCase()} · ${short}`
+}
+
+function buildKpiSection(
+  rows: ResponseRow[],
+  lang: Lang,
+  t: ReturnType<typeof L>,
+  questions: SurveyQuestion[] = [],
+): (Paragraph | Table)[] {
   const n = rows.length
-  const { nps } = npsBreakdown(rows)
+  const { nps } = npsBreakdown(rows, questions)
+
+  // Dynamische lijst van scale-vragen — in display_order, alleen die met antwoorden
+  // (zodat we geen lege "0 / 5" KPI-kaartjes tonen voor pas-toegevoegde vragen).
+  const scaleQs = questions.filter(q => q.type === 'scale')
+  const scaleCells = scaleQs.map(q => {
+    const { value, count } = avgFor(rows, q.code)
+    const max = q.scale_max ?? 5
+    if (count === 0) {
+      return kpiCell(shortKpiLabel(q, lang, t), '—', ` / ${max}`)
+    }
+    return kpiCell(shortKpiLabel(q, lang, t), `${value}`, ` / ${max}`)
+  })
+
+  // Eerste 2 cellen vast (Responses, NPS), dan max 6 scale-cellen verdeeld over
+  // 2 rijen van 4. Als er meer dan 6 scale-vragen zijn, knippen we af — dat houdt
+  // het rapport-layout consistent met de bestaande look.
+  const visible = scaleCells.slice(0, 6)
+  // Pad tot 6 met onzichtbare lege cellen zodat de tabel-layout stabiel blijft
+  while (visible.length < 6) {
+    visible.push(kpiCell('', '', ''))
+  }
 
   const row1 = new TableRow({
     cantSplit: true,
     children: [
       kpiCell(t.kpiResponses, `${n}`),
       kpiCell(t.kpiNps, `${nps}`),
-      kpiCell(t.kpiAtmosphere, `${avg(rows, 'q4_sfeer')}`, ' / 5'),
-      kpiCell(t.kpiAcoustics, `${avg(rows, 'q6_akoestiek')}`, ' / 5'),
+      visible[0],
+      visible[1],
     ],
   })
   const row2 = new TableRow({
     cantSplit: true,
-    children: [
-      kpiCell(t.kpiRepertoire, `${avg(rows, 'q8_repertoire')}`, ' / 5'),
-      kpiCell(t.kpiInteraction, `${avg(rows, 'q10_interactie')}`, ' / 5'),
-      kpiCell(t.kpiComms, `${avg(rows, 'q12_communic')}`, ' / 5'),
-      kpiCell(t.kpiContribution, `${avg(rows, 'q14_bijdrage')}`, ' / 5'),
-    ],
+    children: [visible[2], visible[3], visible[4], visible[5]],
   })
 
   return [
@@ -399,15 +529,23 @@ function buildKpiSection(rows: ResponseRow[], lang: Lang, t: ReturnType<typeof L
   ]
 }
 
-function buildScoresTable(rows: ResponseRow[], lang: Lang, t: ReturnType<typeof L>): (Paragraph | Table)[] {
-  const dims: { label: string; key: keyof ResponseRow }[] = [
-    { label: t.kpiAtmosphere,  key: 'q4_sfeer' },
-    { label: t.kpiAcoustics,   key: 'q6_akoestiek' },
-    { label: t.kpiRepertoire,  key: 'q8_repertoire' },
-    { label: t.kpiInteraction, key: 'q10_interactie' },
-    { label: t.kpiComms,       key: 'q12_communic' },
-    { label: t.kpiContribution,key: 'q14_bijdrage' },
-  ]
+function buildScoresTable(
+  rows: ResponseRow[],
+  lang: Lang,
+  t: ReturnType<typeof L>,
+  questions: SurveyQuestion[] = [],
+): (Paragraph | Table)[] {
+  // Survey-aware: alle scale-vragen uit de snapshot, in display_order.
+  // We tonen ALLE scale-vragen — ook degene zonder antwoorden — zodat het rapport
+  // het volledige onderzoeksdesign reflecteert (i.t.v. KPI-tegels die compacter
+  // moeten blijven). Lege vragen krijgen "—" i.p.v. een misleidend 0.
+  const dims = questions
+    .filter(q => q.type === 'scale')
+    .map(q => ({
+      label: shortKpiLabel(q, lang, t),
+      code: q.code,
+      max: q.scale_max ?? 5,
+    }))
 
   const headerRow = new TableRow({
     tableHeader: true,
@@ -429,13 +567,14 @@ function buildScoresTable(rows: ResponseRow[], lang: Lang, t: ReturnType<typeof 
         width: { size: 15, type: WidthType.PERCENTAGE },
         shading: { type: ShadingType.CLEAR, color: 'auto', fill: COLORS.paper },
         borders: LIGHT_BORDER,
-        children: [p('Score / 5', { bold: true, size: 20, alignment: AlignmentType.CENTER } as any)],
+        children: [p('Score', { bold: true, size: 20, alignment: AlignmentType.CENTER } as any)],
       }),
     ],
   })
 
   const bodyRows = dims.map(d => {
-    const score = avg(rows, d.key)
+    const { value: score, count } = avgFor(rows, d.code)
+    const hasData = count > 0
     return new TableRow({
       cantSplit: true,
       children: [
@@ -449,7 +588,11 @@ function buildScoresTable(rows: ResponseRow[], lang: Lang, t: ReturnType<typeof 
           margins: { top: 120, bottom: 120, left: 200, right: 200 },
           children: [
             new Paragraph({
-              children: [new TextRun({ text: bar(score, 5, 32), color: COLORS.teal, font: 'Consolas' })],
+              children: [new TextRun({
+                text: hasData ? bar(score, d.max, 32) : '',
+                color: COLORS.teal,
+                font: 'Consolas',
+              })],
             }),
           ],
         }),
@@ -459,7 +602,13 @@ function buildScoresTable(rows: ResponseRow[], lang: Lang, t: ReturnType<typeof 
           children: [
             new Paragraph({
               alignment: AlignmentType.CENTER,
-              children: [new TextRun({ text: `${score}`, bold: true, color: COLORS.tealDark, size: 24 })],
+              children: [new TextRun({
+                text: hasData ? `${score} / ${d.max}` : '— / ' + d.max,
+                bold: true,
+                color: hasData ? COLORS.tealDark : COLORS.inkSoft,
+                italics: !hasData,
+                size: 22,
+              })],
             }),
           ],
         }),
@@ -482,8 +631,20 @@ function buildScoresTable(rows: ResponseRow[], lang: Lang, t: ReturnType<typeof 
   ]
 }
 
-function buildNpsSection(rows: ResponseRow[], lang: Lang, t: ReturnType<typeof L>): (Paragraph | Table)[] {
-  const { dist, promoters, passives, detractors, total, nps } = npsBreakdown(rows)
+function buildNpsSection(
+  rows: ResponseRow[],
+  lang: Lang,
+  t: ReturnType<typeof L>,
+  questions: SurveyQuestion[] = [],
+): (Paragraph | Table)[] {
+  // Survey-aware NPS: gebruik de NPS-vraag uit de snapshot (kan in theorie afwijken
+  // van q1_nps). Als er geen NPS-vraag is, skip de hele sectie.
+  const npsQ = questions.find(q => q.type === 'nps')
+  if (!npsQ && questions.length > 0) {
+    // Snapshot beschikbaar maar geen NPS-vraag → niets te tonen
+    return []
+  }
+  const { dist, promoters, passives, detractors, total, nps, min } = npsBreakdown(rows, questions)
   const maxBar = Math.max(...dist, 1)
 
   const headerRow = new TableRow({
@@ -517,7 +678,11 @@ function buildNpsSection(rows: ResponseRow[], lang: Lang, t: ReturnType<typeof L
     ],
   })
 
-  const distRows = dist.map((count, score) => {
+  const distRows = dist.map((count, i) => {
+    // 'score' = werkelijke waarde op de NPS-schaal (min..max), niet array-index.
+    // Bij standaard 0-10 schaal is min=0 dus score===i; bij afwijkende schalen
+    // (theoretisch) verschuift dit netjes mee.
+    const score = min + i
     let cat = t.npsDetractors
     let color = COLORS.red
     if (score >= 9) { cat = t.npsPromoters; color = COLORS.green }
@@ -593,9 +758,50 @@ function buildNpsSection(rows: ResponseRow[], lang: Lang, t: ReturnType<typeof L
   ]
 }
 
-function buildAttendanceSection(rows: ResponseRow[], lang: Lang, t: ReturnType<typeof L>): (Paragraph | Table)[] {
-  const data = attendanceMap(rows, lang)
+function buildAttendanceSection(
+  rows: ResponseRow[],
+  lang: Lang,
+  t: ReturnType<typeof L>,
+  questions: SurveyQuestion[] = [],
+): (Paragraph | Table)[] {
+  // Survey-aware: gebruik de eerste choice-vraag uit de snapshot (typisch
+  // "hoeveel concerten bijgewoond?" voor Reeks I, mogelijk iets anders voor
+  // andere surveys — of helemaal niets). Als er geen choice-vraag is, skip.
+  const choiceQ = questions.find(q => q.type === 'choice' && !/contact|email|naam/i.test(q.code))
+  if (!choiceQ && questions.length > 0) return []
+
+  const data = choiceQ
+    ? choiceBreakdown(rows, choiceQ)
+    : ((): { label: string; count: number }[] => {
+        // Legacy fallback: oude q3_aantal kolom (geen snapshot beschikbaar)
+        const counts: Record<string, number> = {}
+        rows.forEach(r => {
+          const v = (r as any).q3_aantal
+          if (v) counts[v] = (counts[v] || 0) + 1
+        })
+        const labelFor = (k: string) =>
+          (k === 'alle 6' || k === 'all 6') ? (lang === 'en' ? 'all 6' : 'alle 6') : k
+        const ordered = ['1', '2', '3', '4', '5', 'alle 6', 'all 6']
+        const seen = new Set<string>()
+        const out: { label: string; count: number }[] = []
+        for (const k of ordered) {
+          if (counts[k] && !seen.has(k)) {
+            out.push({ label: labelFor(k), count: counts[k] })
+            seen.add(k)
+          }
+        }
+        for (const k of Object.keys(counts)) {
+          if (!seen.has(k)) out.push({ label: k, count: counts[k] })
+        }
+        return out
+      })()
+
+  if (data.length === 0) return []
   const max = Math.max(...data.map(d => d.count), 1)
+  // Sectie-titel: gebruik label van de choice-vraag als die uit snapshot komt
+  const sectionTitle = choiceQ
+    ? ((lang === 'en' ? choiceQ.label_en : choiceQ.label_nl) || t.attendanceTitle)
+    : t.attendanceTitle
 
   const headerRow = new TableRow({
     tableHeader: true,
@@ -659,7 +865,7 @@ function buildAttendanceSection(rows: ResponseRow[], lang: Lang, t: ReturnType<t
       heading: HeadingLevel.HEADING_1,
       pageBreakBefore: true,
       spacing: { after: 200 },
-      children: [new TextRun({ text: t.attendanceTitle, bold: true, color: COLORS.tealDark, size: 36 })],
+      children: [new TextRun({ text: sectionTitle, bold: true, color: COLORS.tealDark, size: 36 })],
     }),
     new Table({
       width: { size: 100, type: WidthType.PERCENTAGE },
@@ -811,30 +1017,25 @@ function buildAiSection(analysis: AnalysisResult | null, lang: Lang, t: ReturnTy
   return out
 }
 
-function buildOpenAnswersSection(rows: ResponseRow[], lang: Lang, t: ReturnType<typeof L>): Paragraph[] {
-  const openQs: { key: keyof ResponseRow; label: string }[] = lang === 'en' ? [
-    { key: 'q2_blijft_bij',  label: 'Q2 — What stays with you?' },
-    { key: 'q5_sfeer_open',  label: 'Q5 — Atmosphere' },
-    { key: 'q7_fortepiano',  label: 'Q7 — Fortepiano' },
-    { key: 'q9_favoriet',    label: 'Q9 — Favourite concert' },
-    { key: 'q11_gesprek',    label: 'Q11 — Room for conversation' },
-    { key: 'q13_catering',   label: 'Q13 — Catering' },
-    { key: 'q15_wensen_2',   label: 'Q15 — Wishes Series II' },
-    { key: 'q16_gasten',     label: 'Q16 — Guest artists' },
-    { key: 'q17_terugkomen', label: 'Q17 — Coming back' },
-    { key: 'q18_overige',    label: 'Q18 — Other remarks' },
-  ] : [
-    { key: 'q2_blijft_bij',  label: 'Q2 — Wat blijft je bij?' },
-    { key: 'q5_sfeer_open',  label: 'Q5 — Sfeer' },
-    { key: 'q7_fortepiano',  label: 'Q7 — Fortepiano' },
-    { key: 'q9_favoriet',    label: 'Q9 — Favoriet concert' },
-    { key: 'q11_gesprek',    label: 'Q11 — Ruimte voor gesprek' },
-    { key: 'q13_catering',   label: 'Q13 — Catering' },
-    { key: 'q15_wensen_2',   label: 'Q15 — Wensen Reeks II' },
-    { key: 'q16_gasten',     label: 'Q16 — Gastartiesten' },
-    { key: 'q17_terugkomen', label: 'Q17 — Terugkomen' },
-    { key: 'q18_overige',    label: 'Q18 — Overige' },
-  ]
+function buildOpenAnswersSection(
+  rows: ResponseRow[],
+  lang: Lang,
+  t: ReturnType<typeof L>,
+  questions: SurveyQuestion[] = [],
+): Paragraph[] {
+  // Survey-aware: itereer over ALLE text/paragraph vragen uit de snapshot,
+  // in display_order. Skip de "naam" / "email" vragen want die zijn niet
+  // analytisch interessant en geven privacy-leakage in een rapport.
+  const openQs = questions
+    .filter(q => (q.type === 'text' || q.type === 'paragraph') && !/naam|name|email/i.test(q.code))
+    .map(q => ({
+      code: q.code,
+      // Label-formaat consistent met de oude versie: "Q2 — Wat blijft je bij?"
+      label: `${q.code.toUpperCase()} — ${(lang === 'en' ? q.label_en : q.label_nl) || q.code}`,
+    }))
+
+  // Bepaal welke NPS-code we tonen in de meta-regel onder elk antwoord
+  const npsCode = questions.find(q => q.type === 'nps')?.code ?? 'q1_nps'
 
   const out: Paragraph[] = [
     new Paragraph({
@@ -845,9 +1046,24 @@ function buildOpenAnswersSection(rows: ResponseRow[], lang: Lang, t: ReturnType<
     }),
   ]
 
+  if (openQs.length === 0) {
+    out.push(p(lang === 'en' ? 'No open questions in this survey.' : 'Geen open vragen in deze enquête.', {
+      italics: true, color: COLORS.inkSoft, size: 20,
+    }))
+    return out
+  }
+
   openQs.forEach(q => {
     const answers = rows
-      .map(r => ({ text: (r[q.key] as string | null) || '', date: r.submitted_at, nps: r.q1_nps }))
+      .map(r => {
+        const v = getAnswer(r, q.code)
+        const npsV = getAnswer(r, npsCode)
+        return {
+          text: typeof v === 'string' ? v : '',
+          date: r.submitted_at,
+          nps: typeof npsV === 'number' || typeof npsV === 'string' ? String(npsV) : '—',
+        }
+      })
       .filter(a => a.text && a.text.trim().length > 0)
 
     out.push(new Paragraph({
@@ -884,21 +1100,117 @@ function buildOpenAnswersSection(rows: ResponseRow[], lang: Lang, t: ReturnType<
   return out
 }
 
-function buildRawDataSection(rows: ResponseRow[], lang: Lang, t: ReturnType<typeof L>): (Paragraph | Table)[] {
-  const headers = [
-    t.rawDate, t.rawNps, t.rawConcerts, t.rawAtmosphere, t.rawAcoustics, t.rawRepertoire,
-    t.rawJos, t.rawComms, t.rawContribution, t.rawName,
-  ]
+/**
+ * Korte kolomheader voor de raw-data tabel: probeer een Reeks-I i18n-string,
+ * anders een afkorting van het label.
+ */
+function rawHeaderFor(q: SurveyQuestion, lang: Lang, t: ReturnType<typeof L>): string {
+  const map: Record<string, string> = {
+    q1_nps: t.rawNps,
+    q3_aantal: t.rawConcerts,
+    q4_sfeer: t.rawAtmosphere,
+    q6_akoestiek: t.rawAcoustics,
+    q8_repertoire: t.rawRepertoire,
+    q10_interactie: t.rawJos,
+    q12_communic: t.rawComms,
+    q14_bijdrage: t.rawContribution,
+    q19_naam: t.rawName,
+  }
+  if (map[q.code]) return map[q.code]
+  // Compact header: gewoon de code, want lange labels passen niet in landscape-tabel
+  return q.code.toUpperCase()
+}
+
+function buildRawDataSection(
+  rows: ResponseRow[],
+  lang: Lang,
+  t: ReturnType<typeof L>,
+  questions: SurveyQuestion[] = [],
+): (Paragraph | Table)[] {
+  // Survey-aware kolommen: Datum + NPS + alle scale + eerste choice + naam-vraag.
+  // Beperk tot max 11 kolommen om in landscape-A4 leesbaar te blijven (~25mm/kolom).
+  const npsQ = questions.find(q => q.type === 'nps')
+  const choiceQ = questions.find(q => q.type === 'choice' && !/contact|email/i.test(q.code))
+  const scaleQs = questions.filter(q => q.type === 'scale')
+  const nameQ = questions.find(q => q.type === 'text' && /naam|name/i.test(q.code))
+
+  // Build column-list — Datum altijd eerste, daarna gestructureerd
+  const cols: Array<{ header: string; getCell: (r: ResponseRow) => string; bold?: boolean }> = []
+  cols.push({
+    header: t.rawDate,
+    getCell: (r) => fmtDateTime(r.submitted_at, lang),
+  })
+  if (npsQ) {
+    cols.push({
+      header: rawHeaderFor(npsQ, lang, t),
+      getCell: (r) => {
+        const v = getAnswer(r, npsQ.code)
+        return v == null ? '—' : String(v)
+      },
+      bold: true,
+    })
+  }
+  if (choiceQ) {
+    cols.push({
+      header: rawHeaderFor(choiceQ, lang, t),
+      getCell: (r) => {
+        const v = getAnswer(r, choiceQ.code)
+        return v == null ? '—' : String(v)
+      },
+    })
+  }
+  // Scale-vragen — beperken tot eerste 6 om tabel werkbaar te houden
+  const maxScales = nameQ ? 6 : 8 // als er een naam-kolom volgt, één scale minder
+  for (const q of scaleQs.slice(0, maxScales)) {
+    cols.push({
+      header: rawHeaderFor(q, lang, t),
+      getCell: (r) => {
+        const v = getAnswer(r, q.code)
+        return v == null ? '—' : String(v)
+      },
+    })
+  }
+  if (nameQ) {
+    cols.push({
+      header: rawHeaderFor(nameQ, lang, t),
+      getCell: (r) => {
+        const v = getAnswer(r, nameQ.code)
+        return v == null ? '—' : String(v)
+      },
+    })
+  }
+
+  // Fallback voor surveys zonder snapshot (legacy Reeks I)
+  if (questions.length === 0) {
+    const fallbackHeaders = [
+      t.rawDate, t.rawNps, t.rawConcerts, t.rawAtmosphere, t.rawAcoustics, t.rawRepertoire,
+      t.rawJos, t.rawComms, t.rawContribution, t.rawName,
+    ]
+    const legacyKeys = ['q1_nps', 'q3_aantal', 'q4_sfeer', 'q6_akoestiek', 'q8_repertoire',
+                        'q10_interactie', 'q12_communic', 'q14_bijdrage', 'q19_naam']
+    cols.length = 0
+    cols.push({ header: fallbackHeaders[0], getCell: r => fmtDateTime(r.submitted_at, lang) })
+    legacyKeys.forEach((k, i) => {
+      cols.push({
+        header: fallbackHeaders[i + 1],
+        getCell: r => {
+          const v = (r as any)[k]
+          return v == null ? '—' : String(v)
+        },
+        bold: i === 0,
+      })
+    })
+  }
 
   const headerRow = new TableRow({
     tableHeader: true,
     cantSplit: true,
-    children: headers.map(h =>
+    children: cols.map(c =>
       new TableCell({
         shading: { type: ShadingType.CLEAR, color: 'auto', fill: COLORS.paper },
         borders: LIGHT_BORDER,
         margins: { top: 80, bottom: 80, left: 100, right: 100 },
-        children: [p(h, { bold: true, size: 16 })],
+        children: [p(c.header, { bold: true, size: 16 })],
       })
     ),
   })
@@ -906,28 +1218,13 @@ function buildRawDataSection(rows: ResponseRow[], lang: Lang, t: ReturnType<type
   const dataRows = rows.map(r =>
     new TableRow({
       cantSplit: true,
-      children: [
-        new TableCell({ borders: LIGHT_BORDER, margins: { top: 60, bottom: 60, left: 100, right: 80 },
-          children: [p(fmtDateTime(r.submitted_at, lang), { size: 16 })] }),
-        new TableCell({ borders: LIGHT_BORDER, margins: { top: 60, bottom: 60, left: 100, right: 80 },
-          children: [p(`${r.q1_nps}`, { bold: true, size: 16 })] }),
-        new TableCell({ borders: LIGHT_BORDER, margins: { top: 60, bottom: 60, left: 100, right: 80 },
-          children: [p(r.q3_aantal || '—', { size: 16 })] }),
-        new TableCell({ borders: LIGHT_BORDER, margins: { top: 60, bottom: 60, left: 100, right: 80 },
-          children: [p(`${r.q4_sfeer}`, { size: 16 })] }),
-        new TableCell({ borders: LIGHT_BORDER, margins: { top: 60, bottom: 60, left: 100, right: 80 },
-          children: [p(`${r.q6_akoestiek}`, { size: 16 })] }),
-        new TableCell({ borders: LIGHT_BORDER, margins: { top: 60, bottom: 60, left: 100, right: 80 },
-          children: [p(`${r.q8_repertoire}`, { size: 16 })] }),
-        new TableCell({ borders: LIGHT_BORDER, margins: { top: 60, bottom: 60, left: 100, right: 80 },
-          children: [p(`${r.q10_interactie}`, { size: 16 })] }),
-        new TableCell({ borders: LIGHT_BORDER, margins: { top: 60, bottom: 60, left: 100, right: 80 },
-          children: [p(`${r.q12_communic}`, { size: 16 })] }),
-        new TableCell({ borders: LIGHT_BORDER, margins: { top: 60, bottom: 60, left: 100, right: 80 },
-          children: [p(`${r.q14_bijdrage}`, { size: 16 })] }),
-        new TableCell({ borders: LIGHT_BORDER, margins: { top: 60, bottom: 60, left: 100, right: 80 },
-          children: [p(r.q19_naam || '—', { size: 16 })] }),
-      ],
+      children: cols.map(c =>
+        new TableCell({
+          borders: LIGHT_BORDER,
+          margins: { top: 60, bottom: 60, left: 100, right: 80 },
+          children: [p(c.getCell(r), { bold: c.bold, size: 16 })],
+        })
+      ),
     })
   )
 
@@ -947,11 +1244,23 @@ function buildRawDataSection(rows: ResponseRow[], lang: Lang, t: ReturnType<type
 }
 
 // ===== Main entry =====
+/**
+ * Bouw een volledig Word-rapport voor één survey.
+ *
+ * @param rows      antwoord-rijen voor deze survey
+ * @param analysis  optionele AI-analyse (uit cache)
+ * @param lang      'nl' | 'en'
+ * @param survey    optionele survey-metadata (titel, artiest…)
+ * @param questions per-survey vragen-snapshot (uit survey_questions, display order).
+ *                  Als leeg, valt het rapport terug op de oude q1..q20 hardcoded
+ *                  layout — handig voor backwards-compat met cached/oudere data.
+ */
 export async function buildSurveyDocx(
   rows: ResponseRow[],
   analysis: AnalysisResult | null,
   lang: Lang,
   survey?: Survey,
+  questions: SurveyQuestion[] = [],
 ): Promise<Uint8Array> {
   const t = L(lang)
 
@@ -1000,13 +1309,13 @@ export async function buildSurveyDocx(
         }),
       },
       children: [
-        ...buildKpiSection(rows, lang, t),
-        ...buildScoresTable(rows, lang, t),
-        ...buildNpsSection(rows, lang, t),
-        ...buildAttendanceSection(rows, lang, t),
+        ...buildKpiSection(rows, lang, t, questions),
+        ...buildScoresTable(rows, lang, t, questions),
+        ...buildNpsSection(rows, lang, t, questions),
+        ...buildAttendanceSection(rows, lang, t, questions),
         ...buildAiSection(analysis, lang, t),
-        ...buildOpenAnswersSection(rows, lang, t),
-        ...buildRawDataSection(rows, lang, t),
+        ...buildOpenAnswersSection(rows, lang, t, questions),
+        ...buildRawDataSection(rows, lang, t, questions),
       ],
     },
   ]
