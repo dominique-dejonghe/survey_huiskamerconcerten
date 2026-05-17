@@ -307,6 +307,8 @@ app.get('/admin/logout', async (c) => {
 // ============================================================
 // ADMIN: OVERVIEW (all surveys) + per-survey dashboard
 // ============================================================
+// Normalize trailing slash: /admin/ -> /admin (Cloudflare Pages doesn't auto-collapse)
+app.get('/admin/', (c) => c.redirect('/admin', 301))
 app.get('/admin', async (c) => {
   const guard = await requireAdmin(c)
   if (guard) return guard
