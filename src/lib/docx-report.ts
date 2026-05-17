@@ -448,24 +448,20 @@ function buildCover(
 }
 
 /**
- * Korte label voor KPI-tegels: probeer eerst de Reeks-I i18n strings, anders
- * truncated label_nl van de vraag. Houdt de output netjes als kolomtitel.
+ * Korte label voor KPI-tegels en score-tabel: ALTIJD gebaseerd op de snapshot,
+ * zodat survey-specifieke labels (bv. "prijs-kwaliteitverhouding" voor Ebdiep
+ * i.p.v. "Bijdrage-model" voor Reeks I) correct doorkomen in het rapport.
+ *
+ * Format: "Q-CODE · verkort label" — consistent met buildOpenAnswersSection,
+ * en de snapshot is single source of truth.
+ *
+ * NB: de oude hardcoded code→i18n map is bewust verwijderd. Die overschreef
+ * de gecustomiseerde snapshot-labels en zorgde ervoor dat Ebdiep een rapport
+ * kreeg met Reeks-I terminologie ("Bijdrage-model" i.p.v. de werkelijke vraag).
  */
-function shortKpiLabel(q: SurveyQuestion, lang: Lang, t: ReturnType<typeof L>): string {
-  // Heuristische mapping van bekende codes op de bestaande i18n-strings,
-  // zodat Reeks-I rapporten exact dezelfde KPI-labels behouden als vroeger.
-  const map: Record<string, string> = {
-    q4_sfeer: t.kpiAtmosphere,
-    q6_akoestiek: t.kpiAcoustics,
-    q8_repertoire: t.kpiRepertoire,
-    q10_interactie: t.kpiInteraction,
-    q12_communic: t.kpiComms,
-    q14_bijdrage: t.kpiContribution,
-  }
-  if (map[q.code]) return map[q.code]
-  // Voor onbekende codes: code + verkort label
+function shortKpiLabel(q: SurveyQuestion, lang: Lang, _t: ReturnType<typeof L>): string {
   const lbl = (lang === 'en' ? q.label_en : q.label_nl) || q.code
-  const short = lbl.length > 32 ? lbl.slice(0, 29) + '…' : lbl
+  const short = lbl.length > 48 ? lbl.slice(0, 45) + '…' : lbl
   return `${q.code.toUpperCase()} · ${short}`
 }
 
