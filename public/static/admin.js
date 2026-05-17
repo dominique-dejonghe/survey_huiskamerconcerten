@@ -206,6 +206,16 @@
       var v = s.avg || 0;
       var max = s.scale_max || 5;
       var pct = (v / max) * 100;
+      var hasData = (s.count || 0) > 0;
+      // Bij 0 antwoorden tonen we expliciet "nog geen antwoorden" i.p.v.
+      // een misleidende 0.00/5 (visueel suggereert dat een zeer slechte score).
+      if (!hasData) {
+        return '<div class="bar-row bar-row--empty">'
+          + '<div class="bar-label">' + escapeHtml(s.code.toUpperCase() + ' · ' + s.label_nl) + '</div>'
+          + '<div class="bar-track"><div class="bar-fill bar-fill--empty" style="width:0%"></div></div>'
+          + '<div class="bar-value bar-value--empty">nog geen antwoorden</div>'
+          + '</div>';
+      }
       return '<div class="bar-row">'
         + '<div class="bar-label">' + escapeHtml(s.code.toUpperCase() + ' · ' + s.label_nl) + '</div>'
         + '<div class="bar-track"><div class="bar-fill" style="width:' + pct.toFixed(1) + '%"></div></div>'

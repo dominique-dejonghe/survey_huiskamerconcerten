@@ -466,6 +466,14 @@ input:-webkit-autofill:focus {
   font-family: 'Playfair Display', serif; color: var(--teal-dark);
   flex-shrink: 0;
 }
+/* Variant voor scale-vragen zonder antwoorden — voorkomt misleidende 0.00/5 */
+.bar-row--empty { opacity: .55; }
+.bar-row--empty .bar-label { font-style: italic; }
+.bar-fill--empty { background: var(--border); }
+.bar-value--empty {
+  width: auto; min-width: 140px; font-style: italic; font-weight: 500;
+  font-family: inherit; color: var(--ink-soft, #6b7280); font-size: 13px;
+}
 
 .nps-bar {
   display: flex; align-items: flex-end; gap: 6px; height: 160px;

@@ -1308,11 +1308,16 @@ app.get('/api/admin/export', async (c) => {
   const guard = await requireAdmin(c)
   if (guard) return guard
   const surveyId = await adminSurveyId(c)
-  const survey = await getSurveyById(c.env.DB, surveyId)
+  // Survey + vragen-snapshot parallel ophalen — beide nodig voor survey-aware
+  // CSV/JSON-export (kolommen + labels komen uit de snapshot).
+  const [survey, questions, rows] = await Promise.all([
+    getSurveyById(c.env.DB, surveyId),
+    listSurveyQuestions(c.env.DB, surveyId),
+    listResponses(c.env.DB, surveyId),
+  ])
   const fmtRaw = c.req.query('format')
   const format: 'csv' | 'json' | 'docx' =
     fmtRaw === 'json' ? 'json' : fmtRaw === 'docx' ? 'docx' : 'csv'
-  const rows = await listResponses(c.env.DB, surveyId)
 
   const ip = getClientIp(c)
   const ipHash = await hashIp(ip, c.env.IP_HASH_SALT || 'dev')
@@ -1323,7 +1328,7 @@ app.get('/api/admin/export', async (c) => {
   const fileBase = `${slug}-${today}`
 
   if (format === 'csv') {
-    const csv = rowsToCsv(rows)
+    const csv = rowsToCsv(rows, questions)
     return new Response(csv, {
       headers: {
         'Content-Type': 'text/csv; charset=utf-8',
@@ -1333,7 +1338,7 @@ app.get('/api/admin/export', async (c) => {
   }
 
   if (format === 'json') {
-    const json = rowsToJson(rows)
+    const json = rowsToJson(rows, questions, survey)
     return new Response(json, {
       headers: {
         'Content-Type': 'application/json; charset=utf-8',
