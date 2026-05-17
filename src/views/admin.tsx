@@ -249,7 +249,10 @@ export const DashboardPage: FC<{ survey: Survey; brand?: Brand | null }> = ({ su
         </section>
 
         <section class="admin-section">
-          <h2>Concertdeelname</h2>
+          {/* H2 wordt door admin.js vervangen door het label van de eerste
+              choice-vraag (b.v. "Hoeveel concerten heb je bijgewoond?"). De
+              hele sectie wordt verborgen als er geen choice-vragen zijn. */}
+          <h2>Verdeling</h2>
           <div id="attendanceChart"></div>
         </section>
 
@@ -284,20 +287,10 @@ export const DashboardPage: FC<{ survey: Survey; brand?: Brand | null }> = ({ su
           <h2>Ruwe data</h2>
           <div class="data-table-wrap">
             <table class="data-table" id="dataTable">
-              <thead>
-                <tr>
-                  <th data-sort="submitted_at">Datum</th>
-                  <th data-sort="q1_nps">NPS</th>
-                  <th data-sort="q3_aantal"># concerten</th>
-                  <th data-sort="q4_sfeer">Sfeer</th>
-                  <th data-sort="q6_akoestiek">Akoestiek</th>
-                  <th data-sort="q8_repertoire">Repertoire</th>
-                  <th data-sort="q10_interactie">Interactie</th>
-                  <th data-sort="q12_communic">Comm.</th>
-                  <th data-sort="q14_bijdrage">Bijdrage</th>
-                  <th data-sort="q19_naam">Naam</th>
-                </tr>
-              </thead>
+              {/* Kolommen worden client-side opgebouwd in admin.js op basis van
+                  de vragen-snapshot van deze survey. Geen hard-coded q*-kolommen
+                  meer hier; zo werkt de tabel ook voor surveys zonder Reeks-I codes. */}
+              <thead><tr></tr></thead>
               <tbody id="dataBody"></tbody>
             </table>
           </div>

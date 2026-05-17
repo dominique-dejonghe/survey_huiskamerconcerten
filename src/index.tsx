@@ -1289,10 +1289,17 @@ app.get('/api/admin/responses', async (c) => {
   const guard = await requireAdmin(c)
   if (guard) return guard
   const surveyId = await adminSurveyId(c)
-  const rows = await listResponses(c.env.DB, surveyId)
-  const stats = computeStats(rows)
+  // Laad responses + survey-snapshot van vragen in parallel; stats heeft beide
+  // nodig (per-survey labels, types, schaal-grenzen). Het frontend gebruikt
+  // de questions-lijst ook om dynamisch labels te tonen i.p.v. gehardcodeerd
+  // Reeks-I terminologie ("Sfeer huiskamer", "Jos · interactie", …).
+  const [rows, questions] = await Promise.all([
+    listResponses(c.env.DB, surveyId),
+    listSurveyQuestions(c.env.DB, surveyId),
+  ])
+  const stats = computeStats(rows, questions)
   c.header('Cache-Control', 'private, max-age=30')
-  return c.json({ responses: rows, stats, surveyId })
+  return c.json({ responses: rows, stats, questions, surveyId })
 })
 
 app.get('/api/admin/export', async (c) => {

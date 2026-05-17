@@ -2,41 +2,130 @@
 (function () {
   'use strict';
 
-  var QUESTIONS_OPEN = [
-    { id: 'q2_blijft_bij', label: 'Q2 — Wat blijft je bij' },
-    { id: 'q5_sfeer_open', label: 'Q5 — Sfeer' },
-    { id: 'q7_fortepiano', label: 'Q7 — Fortepiano' },
-    { id: 'q9_favoriet',   label: 'Q9 — Favoriet concert' },
-    { id: 'q11_gesprek',   label: 'Q11 — Ruimte gesprek' },
-    { id: 'q13_catering',  label: 'Q13 — Catering' },
-    { id: 'q15_wensen_2',  label: 'Q15 — Wensen Reeks II' },
-    { id: 'q16_gasten',    label: 'Q16 — Gewenste gasten' },
-    { id: 'q17_terugkomen',label: 'Q17 — Terugkomen' },
-    { id: 'q18_overige',   label: 'Q18 — Overige' }
-  ];
-  var SCALE_QS = [
-    { id: 'q4_sfeer',       label: 'Q4 · Sfeer huiskamer' },
-    { id: 'q6_akoestiek',   label: 'Q6 · Akoestiek' },
-    { id: 'q8_repertoire',  label: 'Q8 · Repertoire' },
-    { id: 'q10_interactie', label: 'Q10 · Jos · interactie' },
-    { id: 'q12_communic',   label: 'Q12 · Communicatie' },
-    { id: 'q14_bijdrage',   label: 'Q14 · Bijdrage-model' }
-  ];
-  var ALL_QUESTIONS_LABELS = {
-    submitted_at:'Verstuurd op', q1_nps:'Q1 · NPS (0-10)', q2_blijft_bij:'Q2 · Blijft bij',
-    q3_aantal:'Q3 · # concerten',
-    q4_sfeer:'Q4 · Sfeer (1-5)', q5_sfeer_open:'Q5 · Sfeer toelichting',
-    q6_akoestiek:'Q6 · Akoestiek (1-5)', q7_fortepiano:'Q7 · Fortepiano',
-    q8_repertoire:'Q8 · Repertoire (1-5)', q9_favoriet:'Q9 · Favoriet concert',
-    q10_interactie:'Q10 · Interactie Jos (1-5)', q11_gesprek:'Q11 · Ruimte gesprek',
-    q12_communic:'Q12 · Communicatie (1-5)', q13_catering:'Q13 · Catering',
-    q14_bijdrage:'Q14 · Bijdrage (1-5)',
-    q15_wensen_2:'Q15 · Wensen Reeks II', q16_gasten:'Q16 · Gewenste gasten',
-    q17_terugkomen:'Q17 · Terugkomen', q18_overige:'Q18 · Overige',
-    q19_naam:'Q19 · Naam', q20_contact:'Q20 · Contact?', q20_email:'Q20 · E-mail'
+  // ============================================================
+  // Survey-bewuste dashboard-state
+  // ============================================================
+  // Sinds 2026-05 zijn deze drie lijsten NIET meer hard-coded voor Reeks I.
+  // Ze worden bij elke API-call opgebouwd uit data.questions (de per-survey
+  // snapshot uit survey_questions). Zo gebruikt het Ebdiepconcert-1 dashboard
+  // alleen zijn eigen vragen, met de juiste labels en zonder spook-Q14.
+  var QUESTIONS_OPEN = [];      // [{ id, label }]  — text/paragraph vragen
+  var SCALE_QS = [];            // [{ id, label, max }] — afgeleid uit stats.scaleAverages
+  var CHOICE_QS = [];           // [{ id, label, options:[{value,count}] }]
+  var ALL_QUESTIONS_LABELS = {  // gebruikt door de detail-modal (kolom-namen voor ruwe data)
+    submitted_at: 'Verstuurd op',
   };
+  /** Lijst met data-sort kolommen voor de ruwe-data tabel — wordt dynamisch ingevuld. */
+  var TABLE_COLS = [{ id: 'submitted_at', label: 'Datum', kind: 'date' }];
 
-  var state = { responses: [], stats: null, activeOpenTab: 'q15_wensen_2', search: '', sortKey: 'submitted_at', sortDir: 'desc' };
+  var state = { responses: [], stats: null, activeOpenTab: '', search: '', sortKey: 'submitted_at', sortDir: 'desc' };
+
+  /**
+   * Lees het antwoord op een vraagcode uit een response-row.
+   * Voorrang: answers_json (nieuwe pipeline) → legacy q* kolom (Reeks I).
+   * Geeft '' (lege string) als de vraag niet beantwoord is, zodat sort/filter
+   * werken zonder null-checks overal.
+   */
+  function getAns(row, code) {
+    if (!row) return '';
+    // 1) answers_json — al geparsed in row.__answers door normalizeRows()
+    if (row.__answers && Object.prototype.hasOwnProperty.call(row.__answers, code)) {
+      var v = row.__answers[code];
+      if (v == null) return '';
+      return v;
+    }
+    // 2) legacy kolom (q1_nps..q20_email)
+    if (code in row) {
+      var v2 = row[code];
+      return v2 == null ? '' : v2;
+    }
+    return '';
+  }
+
+  /** Parse answers_json éénmalig per row en cache het in row.__answers. */
+  function normalizeRows(rows) {
+    rows.forEach(function (r) {
+      if (r.__answers) return; // al gedaan
+      var a = {};
+      if (r.answers_json) {
+        try {
+          var p = JSON.parse(r.answers_json);
+          if (p && typeof p === 'object' && !Array.isArray(p)) a = p;
+        } catch (e) { /* ignore — fall back to legacy cols */ }
+      }
+      r.__answers = a;
+    });
+  }
+
+  /**
+   * Bouw de dynamische lijsten op uit het API-antwoord (data.questions + data.stats).
+   * Wordt aangeroepen bij elke loadData() — survey-bewust en zonder hard-coded codes.
+   */
+  function rebuildQuestionLists(questions, stats) {
+    questions = questions || [];
+    QUESTIONS_OPEN = [];
+    SCALE_QS = [];
+    CHOICE_QS = [];
+    ALL_QUESTIONS_LABELS = { submitted_at: 'Verstuurd op' };
+    TABLE_COLS = [{ id: 'submitted_at', label: 'Datum', kind: 'date' }];
+
+    // Map scale-averages by code voor snelle lookup
+    var avgByCode = {};
+    (stats && stats.scaleAverages ? stats.scaleAverages : []).forEach(function (s) { avgByCode[s.code] = s; });
+
+    questions.forEach(function (q) {
+      ALL_QUESTIONS_LABELS[q.code] = q.code.toUpperCase() + ' · ' + q.label_nl;
+      if (q.type === 'nps') {
+        // NPS krijgt zijn eigen sectie boven; geen kolom in scoresChart.
+        TABLE_COLS.push({ id: q.code, label: 'NPS', kind: 'num' });
+      } else if (q.type === 'scale') {
+        SCALE_QS.push({
+          id: q.code,
+          label: q.code.toUpperCase() + ' · ' + q.label_nl,
+          max: (q.scale_max != null ? q.scale_max : 5),
+        });
+        TABLE_COLS.push({ id: q.code, label: shortLabel(q.label_nl), kind: 'num' });
+      } else if (q.type === 'choice') {
+        TABLE_COLS.push({ id: q.code, label: shortLabel(q.label_nl), kind: 'text' });
+      } else if (q.type === 'text' || q.type === 'paragraph') {
+        QUESTIONS_OPEN.push({ id: q.code, label: q.code.toUpperCase() + ' — ' + q.label_nl });
+        // Tekstvragen niet in tabel (te lang); user kan via modal alles zien.
+        // Uitzondering: korte tekst-vragen die typisch een naam zijn (heuristiek: code
+        // bevat 'naam' / 'name') tonen we wél als laatste kolom, want dat is handig.
+        if (/naam|name/i.test(q.code)) {
+          TABLE_COLS.push({ id: q.code, label: 'Naam', kind: 'text' });
+        }
+      }
+    });
+
+    // Choice-breakdowns uit stats — bewaren voor renderChoiceCharts()
+    CHOICE_QS = (stats && stats.choiceBreakdowns ? stats.choiceBreakdowns : []).map(function (c) {
+      return { id: c.code, label: c.label_nl, options: c.options };
+    });
+
+    // Zorg dat activeOpenTab geldig is (na survey-switch of bij eerste load)
+    if (QUESTIONS_OPEN.length > 0) {
+      var hasActive = QUESTIONS_OPEN.some(function (q) { return q.id === state.activeOpenTab; });
+      if (!hasActive) state.activeOpenTab = QUESTIONS_OPEN[0].id;
+    } else {
+      state.activeOpenTab = '';
+    }
+
+    // Zorg dat sortKey nog steeds bestaat in TABLE_COLS, anders terugvallen op datum
+    var sortKeyExists = TABLE_COLS.some(function (c) { return c.id === state.sortKey; });
+    if (!sortKeyExists) { state.sortKey = 'submitted_at'; state.sortDir = 'desc'; }
+  }
+
+  /** Kort label voor tabel-headers — max ~12 tekens, anders ellipsis. */
+  function shortLabel(s) {
+    s = String(s || '');
+    // Knip op eerste komma/aanhalingsteken/punt, of harde lengte 14.
+    var idx = s.search(/[,?.\(\)\u2014\u2013]/);
+    if (idx > 0 && idx <= 18) s = s.slice(0, idx);
+    s = s.trim();
+    if (s.length > 14) s = s.slice(0, 13) + '…';
+    return s;
+  }
 
   // ====== Multi-survey scope ======
   // The surveyId is read from <main class="admin-main" data-survey-id="..."> set by the server.
@@ -78,14 +167,23 @@
   }
 
   function renderKpis(stats) {
-    var npsClass = stats.nps.score >= 50 ? 'promoter' : stats.nps.score < 0 ? 'detractor' : 'passive';
-    var html = ''
-      + kpi('Totaal responses', stats.total, '')
-      + kpi('NPS-score', stats.nps.score, stats.nps.promoters + ' prom · ' + stats.nps.passives + ' pass · ' + stats.nps.detractors + ' detr', npsClass)
-      + kpi('Sfeer (Q4)', stats.averages.q4_sfeer.toFixed(2), '/ 5')
-      + kpi('Akoestiek (Q6)', stats.averages.q6_akoestiek.toFixed(2), '/ 5')
-      + kpi('Repertoire (Q8)', stats.averages.q8_repertoire.toFixed(2), '/ 5')
-      + kpi('Jos · interactie (Q10)', stats.averages.q10_interactie.toFixed(2), '/ 5');
+    var html = kpi('Totaal responses', stats.total, '');
+    if (stats.nps) {
+      var npsClass = stats.nps.score >= 50 ? 'promoter' : stats.nps.score < 0 ? 'detractor' : 'passive';
+      html += kpi('NPS-score', stats.nps.score,
+        stats.nps.promoters + ' prom · ' + stats.nps.passives + ' pass · ' + stats.nps.detractors + ' detr',
+        npsClass);
+    }
+    // Toon de eerste 4 scale-averages als KPI-kaartjes (de rest komt in scoresChart).
+    // Hierdoor is de KPI-rij altijd compact + leesbaar, ongeacht aantal scale-vragen.
+    var scales = (stats.scaleAverages || []).filter(function (s) { return s.type === 'scale'; });
+    scales.slice(0, 4).forEach(function (s) {
+      html += kpi(
+        shortLabel(s.label_nl) + ' (' + s.code.toUpperCase() + ')',
+        (s.avg || 0).toFixed(2),
+        '/ ' + s.scale_max
+      );
+    });
     document.getElementById('kpiGrid').innerHTML = html;
   }
 
@@ -97,20 +195,37 @@
       + '</div>';
   }
 
-  function renderScoresChart(avgs) {
-    var html = SCALE_QS.map(function (q) {
-      var v = avgs[q.id] || 0;
-      var pct = (v / 5) * 100;
+  function renderScoresChart(stats) {
+    var scales = (stats.scaleAverages || []).filter(function (s) { return s.type === 'scale'; });
+    if (scales.length === 0) {
+      document.getElementById('scoresChart').innerHTML =
+        '<div class="empty">Geen schaal-vragen in deze enquête.</div>';
+      return;
+    }
+    var html = scales.map(function (s) {
+      var v = s.avg || 0;
+      var max = s.scale_max || 5;
+      var pct = (v / max) * 100;
       return '<div class="bar-row">'
-        + '<div class="bar-label">' + escapeHtml(q.label) + '</div>'
+        + '<div class="bar-label">' + escapeHtml(s.code.toUpperCase() + ' · ' + s.label_nl) + '</div>'
         + '<div class="bar-track"><div class="bar-fill" style="width:' + pct.toFixed(1) + '%"></div></div>'
-        + '<div class="bar-value">' + v.toFixed(2) + '</div>'
+        + '<div class="bar-value">' + v.toFixed(2) + ' / ' + max + '</div>'
         + '</div>';
     }).join('');
-    document.getElementById('scoresChart').innerHTML = html || '<div class="empty">Nog geen data.</div>';
+    document.getElementById('scoresChart').innerHTML = html;
   }
 
   function renderNpsChart(nps) {
+    var section = document.getElementById('npsChart');
+    if (!section) return;
+    var wrapper = section.closest('.admin-section');
+    if (!nps) {
+      // Verberg de hele sectie als er geen NPS-vraag in deze survey zit
+      if (wrapper) wrapper.style.display = 'none';
+      section.innerHTML = '';
+      return;
+    }
+    if (wrapper) wrapper.style.display = '';
     var max = Math.max.apply(null, nps.distribution.concat([1]));
     var html = '<div class="nps-bar">' + nps.distribution.map(function (count, i) {
       var cls = i <= 6 ? 'detractor' : i <= 8 ? 'passive' : 'promoter';
@@ -121,31 +236,67 @@
         + '<div class="nps-col-num">' + i + '</div>'
         + '</div>';
     }).join('') + '</div>';
-    document.getElementById('npsChart').innerHTML = html;
+    section.innerHTML = html;
   }
 
-  function renderAttendance(counts) {
-    var labels = ['1','2','3','4','5','alle 6'];
-    var max = Math.max.apply(null, labels.map(function (k) { return counts[k] || 0; }).concat([1]));
-    var html = labels.map(function (k) {
-      var c = counts[k] || 0;
-      var pct = (c / max) * 100;
-      return '<div class="bar-row">'
-        + '<div class="bar-label">' + escapeHtml(k) + ' concert' + (k === '1' ? '' : 'en') + '</div>'
-        + '<div class="bar-track"><div class="bar-fill" style="width:' + pct.toFixed(1) + '%"></div></div>'
-        + '<div class="bar-value">' + c + '</div>'
-        + '</div>';
+  function renderAttendance() {
+    // Verbergen als er geen choice-vragen zijn (b.v. Ebdiepconcert-1 zonder q3_aantal).
+    var section = document.getElementById('attendanceChart');
+    if (!section) return;
+    var wrapper = section.closest('.admin-section');
+    if (CHOICE_QS.length === 0) {
+      if (wrapper) wrapper.style.display = 'none';
+      section.innerHTML = '';
+      return;
+    }
+    if (wrapper) wrapper.style.display = '';
+    // Toon één balkenchart per choice-vraag, met als titel het label van de vraag.
+    var html = CHOICE_QS.map(function (q) {
+      var max = Math.max.apply(null, q.options.map(function (o) { return o.count; }).concat([1]));
+      var bars = q.options.map(function (o) {
+        var pct = (o.count / max) * 100;
+        return '<div class="bar-row">'
+          + '<div class="bar-label">' + escapeHtml(o.value) + '</div>'
+          + '<div class="bar-track"><div class="bar-fill" style="width:' + pct.toFixed(1) + '%"></div></div>'
+          + '<div class="bar-value">' + o.count + '</div>'
+          + '</div>';
+      }).join('');
+      // Eerste choice-vraag krijgt geen extra sub-titel (de section-header is genoeg);
+      // bij meerdere choice-vragen tonen we wel een sub-titel per vraag.
+      var subtitle = CHOICE_QS.length > 1
+        ? '<h3 class="chart-subheading">' + escapeHtml(q.label) + '</h3>'
+        : '';
+      return subtitle + bars;
     }).join('');
-    document.getElementById('attendanceChart').innerHTML = html;
+    // Update ook de h2 van deze sectie naar het label van de eerste choice-vraag
+    // (i.p.v. "Concertdeelname" hardcoded — werkt nog voor Reeks I, maar correct
+    // voor andere surveys).
+    if (wrapper && CHOICE_QS.length === 1) {
+      var h2 = wrapper.querySelector('h2');
+      if (h2) h2.textContent = CHOICE_QS[0].label;
+    }
+    section.innerHTML = html;
   }
 
   function renderOpenTabs() {
+    var section = document.getElementById('openTabs');
+    if (!section) return;
+    var wrapper = section.closest('.admin-section');
+    if (QUESTIONS_OPEN.length === 0) {
+      if (wrapper) wrapper.style.display = 'none';
+      section.innerHTML = '';
+      return;
+    }
+    if (wrapper) wrapper.style.display = '';
     var html = QUESTIONS_OPEN.map(function (q) {
-      var n = state.responses.filter(function (r) { return r[q.id] && String(r[q.id]).trim() !== ''; }).length;
+      var n = state.responses.filter(function (r) {
+        var v = getAns(r, q.id);
+        return v && String(v).trim() !== '';
+      }).length;
       var active = state.activeOpenTab === q.id ? ' active' : '';
       return '<button type="button" class="tab' + active + '" data-tab="' + q.id + '">' + escapeHtml(q.label) + '<span class="tab-badge">' + n + '</span></button>';
     }).join('');
-    document.getElementById('openTabs').innerHTML = html;
+    section.innerHTML = html;
     document.querySelectorAll('#openTabs .tab').forEach(function (t) {
       t.addEventListener('click', function () {
         state.activeOpenTab = t.getAttribute('data-tab');
@@ -157,51 +308,102 @@
 
   function renderOpenContent() {
     var qid = state.activeOpenTab;
+    var target = document.getElementById('openContent');
+    if (!target) return;
+    if (!qid) {
+      target.innerHTML = '';
+      return;
+    }
     var search = state.search.trim().toLowerCase();
+    // Zoek dynamisch een "naam"-vraag en een NPS-vraag voor de citaat-metadata;
+    // deze waren vroeger hard-coded op q19_naam / q1_nps.
+    var nameQ = QUESTIONS_OPEN.find(function (q) { return /naam|name/i.test(q.id); });
+    var nameCode = nameQ ? nameQ.id : null;
+    var npsCode = state.stats && state.stats.nps ? state.stats.nps.code : null;
     var quotes = state.responses
-      .filter(function (r) { return r[qid] && String(r[qid]).trim() !== ''; })
+      .filter(function (r) { var v = getAns(r, qid); return v && String(v).trim() !== ''; })
       .filter(function (r) {
         if (!search) return true;
-        return String(r[qid]).toLowerCase().indexOf(search) !== -1
-            || String(r.q19_naam || '').toLowerCase().indexOf(search) !== -1;
+        var ans = String(getAns(r, qid) || '').toLowerCase();
+        var name = String(nameCode ? getAns(r, nameCode) || '' : '').toLowerCase();
+        return ans.indexOf(search) !== -1 || name.indexOf(search) !== -1;
       })
       .map(function (r) {
-        var name = (r.q19_naam && r.q19_naam.trim()) ? r.q19_naam : 'Anoniem';
+        var rawName = nameCode ? String(getAns(r, nameCode) || '').trim() : '';
+        var name = rawName || 'Anoniem';
+        var npsVal = npsCode ? getAns(r, npsCode) : '';
+        var npsBit = (npsVal !== '' && npsVal != null) ? ' · NPS ' + npsVal : '';
         return '<div class="quote">'
-          + escapeHtml(r[qid])
-          + '<span class="quote-meta">— ' + escapeHtml(name) + ' · ' + escapeHtml(fmtNL(r.submitted_at)) + ' · NPS ' + r.q1_nps + '</span>'
+          + escapeHtml(getAns(r, qid))
+          + '<span class="quote-meta">— ' + escapeHtml(name) + ' · ' + escapeHtml(fmtNL(r.submitted_at)) + npsBit + '</span>'
           + '</div>';
       }).join('');
-    document.getElementById('openContent').innerHTML = quotes || '<div class="empty">Geen antwoorden voor deze vraag.</div>';
+    target.innerHTML = quotes || '<div class="empty">Geen antwoorden voor deze vraag.</div>';
+  }
+
+  function renderTableHead() {
+    // Bouw <thead><tr>…</tr></thead> dynamisch op vanuit TABLE_COLS, want
+    // de server-rendered HTML kent alleen Reeks-I kolommen.
+    var thead = document.querySelector('#dataTable thead tr');
+    if (!thead) return;
+    var html = TABLE_COLS.map(function (col) {
+      var arrow = '';
+      if (state.sortKey === col.id) arrow = state.sortDir === 'asc' ? ' ▲' : ' ▼';
+      return '<th data-sort="' + escapeHtml(col.id) + '">' + escapeHtml(col.label) + arrow + '</th>';
+    }).join('');
+    thead.innerHTML = html;
+    // Hang sort-handlers (her)op de nieuwe headers
+    thead.querySelectorAll('th[data-sort]').forEach(function (th) {
+      th.addEventListener('click', function () {
+        var k = th.getAttribute('data-sort');
+        if (state.sortKey === k) state.sortDir = state.sortDir === 'asc' ? 'desc' : 'asc';
+        else { state.sortKey = k; state.sortDir = 'desc'; }
+        renderTableHead();
+        renderTable();
+      });
+    });
   }
 
   function renderTable() {
     var rows = state.responses.slice();
+    var sortKey = state.sortKey;
     rows.sort(function (a, b) {
-      var ka = a[state.sortKey], kb = b[state.sortKey];
-      if (ka == null && kb == null) return 0;
-      if (ka == null) return 1;
-      if (kb == null) return -1;
-      if (ka < kb) return state.sortDir === 'asc' ? -1 : 1;
-      if (ka > kb) return state.sortDir === 'asc' ? 1 : -1;
+      var ka = sortKey === 'submitted_at' ? a[sortKey] : getAns(a, sortKey);
+      var kb = sortKey === 'submitted_at' ? b[sortKey] : getAns(b, sortKey);
+      // Numerieke vergelijking als beide nummers/numeriek zijn
+      var na = typeof ka === 'number' ? ka : (ka !== '' && !isNaN(parseFloat(ka)) ? parseFloat(ka) : null);
+      var nb = typeof kb === 'number' ? kb : (kb !== '' && !isNaN(parseFloat(kb)) ? parseFloat(kb) : null);
+      if (na != null && nb != null) {
+        return state.sortDir === 'asc' ? na - nb : nb - na;
+      }
+      // Leeg helemaal onderaan
+      if ((ka === '' || ka == null) && (kb === '' || kb == null)) return 0;
+      if (ka === '' || ka == null) return 1;
+      if (kb === '' || kb == null) return -1;
+      var sa = String(ka), sb = String(kb);
+      if (sa < sb) return state.sortDir === 'asc' ? -1 : 1;
+      if (sa > sb) return state.sortDir === 'asc' ? 1 : -1;
       return 0;
     });
     var html = rows.map(function (r) {
-      return '<tr data-id="' + r.id + '">'
-        + '<td>' + escapeHtml(fmtNL(r.submitted_at)) + '</td>'
-        + '<td><strong>' + r.q1_nps + '</strong></td>'
-        + '<td>' + escapeHtml(r.q3_aantal) + '</td>'
-        + '<td>' + r.q4_sfeer + '</td>'
-        + '<td>' + r.q6_akoestiek + '</td>'
-        + '<td>' + r.q8_repertoire + '</td>'
-        + '<td>' + r.q10_interactie + '</td>'
-        + '<td>' + r.q12_communic + '</td>'
-        + '<td>' + r.q14_bijdrage + '</td>'
-        + '<td>' + escapeHtml(r.q19_naam || '—') + '</td>'
-        + '</tr>';
+      var cells = TABLE_COLS.map(function (col) {
+        if (col.id === 'submitted_at') {
+          return '<td>' + escapeHtml(fmtNL(r.submitted_at)) + '</td>';
+        }
+        var v = getAns(r, col.id);
+        if (v === '' || v == null) return '<td>—</td>';
+        if (col.kind === 'num') {
+          // NPS in bold zoals voorheen (eerste num-kolom met label 'NPS')
+          if (col.label === 'NPS') return '<td><strong>' + escapeHtml(String(v)) + '</strong></td>';
+          return '<td>' + escapeHtml(String(v)) + '</td>';
+        }
+        return '<td>' + escapeHtml(String(v)) + '</td>';
+      }).join('');
+      return '<tr data-id="' + r.id + '">' + cells + '</tr>';
     }).join('');
-    document.getElementById('dataBody').innerHTML = html || '<tr><td colspan="10" class="empty">Nog geen responses.</td></tr>';
-    document.querySelectorAll('#dataBody tr').forEach(function (tr) {
+    var colspan = TABLE_COLS.length;
+    document.getElementById('dataBody').innerHTML = html || '<tr><td colspan="' + colspan + '" class="empty">Nog geen responses.</td></tr>';
+    document.querySelectorAll('#dataBody tr[data-id]').forEach(function (tr) {
       tr.addEventListener('click', function () { openModal(tr.getAttribute('data-id')); });
     });
   }
@@ -210,7 +412,7 @@
     var r = state.responses.find(function (x) { return x.id === id; });
     if (!r) return;
     var rows = Object.keys(ALL_QUESTIONS_LABELS).map(function (k) {
-      var v = k === 'submitted_at' ? fmtNL(r[k]) : r[k];
+      var v = k === 'submitted_at' ? fmtNL(r[k]) : getAns(r, k);
       return '<div class="modal-row"><div class="k">' + escapeHtml(ALL_QUESTIONS_LABELS[k]) + '</div><div class="v">' + escapeHtml(v == null || v === '' ? '—' : String(v)) + '</div></div>';
     }).join('');
     document.getElementById('modalContent').innerHTML = ''
@@ -227,15 +429,7 @@
   });
   document.addEventListener('keydown', function (e) { if (e.key === 'Escape') closeModal(); });
 
-  // Sorting
-  document.querySelectorAll('#dataTable th[data-sort]').forEach(function (th) {
-    th.addEventListener('click', function () {
-      var k = th.getAttribute('data-sort');
-      if (state.sortKey === k) state.sortDir = state.sortDir === 'asc' ? 'desc' : 'asc';
-      else { state.sortKey = k; state.sortDir = 'desc'; }
-      renderTable();
-    });
-  });
+  // Sorting handlers worden in renderTableHead() opnieuw aangehangen (dynamische kolommen).
 
   // Search
   document.getElementById('openSearch').addEventListener('input', function (e) {
@@ -266,14 +460,21 @@
       })
       .then(function (j) {
         if (!j) return;
-        state.responses = j.responses || [];
+        var rows = j.responses || [];
+        normalizeRows(rows);
+        state.responses = rows;
         state.stats = j.stats;
+        // Bouw QUESTIONS_OPEN / SCALE_QS / CHOICE_QS / TABLE_COLS opnieuw op vanuit
+        // de actuele survey-snapshot. Zo blijft het dashboard automatisch in sync
+        // met vragen-wijzigingen in de bewerk-pagina.
+        rebuildQuestionLists(j.questions || [], j.stats);
         renderKpis(j.stats);
-        renderScoresChart(j.stats.averages);
+        renderScoresChart(j.stats);
         renderNpsChart(j.stats.nps);
-        renderAttendance(j.stats.attendanceCounts);
+        renderAttendance();
         renderOpenTabs();
         renderOpenContent();
+        renderTableHead();
         renderTable();
       });
   }
