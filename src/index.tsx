@@ -9,7 +9,7 @@ import {
   QuestionsLibraryPage, QuestionEditorPage, QuestionsImportPage,
   SurveyQuestionEditorPage,
 } from './views/admin'
-import { responseSchema } from './lib/validation'
+import { responseSchema, validateSurveyAnswers, extractAnswers } from './lib/validation'
 import { hashIp } from './lib/crypto'
 import {
   insertResponse, listResponses, deleteAllResponses,
@@ -200,6 +200,7 @@ app.post('/api/responses', async (c) => {
   let body: unknown
   try { body = await c.req.json() } catch { return c.json({ error: 'invalid_json' }, 400) }
 
+  // ── Stap 1: metadata-validatie (Zod) ───────────────────────
   const parsed = responseSchema.safeParse(body)
   if (!parsed.success) {
     return c.json({
@@ -213,7 +214,8 @@ app.post('/api/responses', async (c) => {
     return c.json({ error: 'spam_detected' }, 400)
   }
 
-  // Resolve survey by id (preferred) or by slug (fallback). Default to 1 for backwards compat.
+  // ── Resolve survey ─────────────────────────────────────────
+  // Default = 1 (Reeks I), maar liefst expliciet via id of slug.
   let surveyId = 1
   if (typeof data.survey_id === 'number' && data.survey_id > 0) {
     const s = await getSurveyById(c.env.DB, data.survey_id)
@@ -223,11 +225,19 @@ app.post('/api/responses', async (c) => {
     if (s) surveyId = s.id
   }
 
-  // Verify survey is open
   const survey = await getSurveyById(c.env.DB, surveyId)
   if (!survey) return c.json({ error: 'unknown_survey' }, 400)
   if (survey.status !== 'open') return c.json({ error: 'survey_closed' }, 403)
 
+  // ── Stap 2: per-vraag-validatie tegen survey snapshot ──────
+  const surveyQuestions = await listSurveyQuestions(c.env.DB, surveyId)
+  const answers = extractAnswers(parsed.data)
+  const issues = validateSurveyAnswers(surveyQuestions, answers)
+  if (issues.length > 0) {
+    return c.json({ error: 'validation_failed', details: issues }, 400)
+  }
+
+  // ── Rate limit + persist ───────────────────────────────────
   const ip = getClientIp(c)
   const salt = c.env.IP_HASH_SALT || 'dev-salt-change-me'
   const ipHash = await hashIp(ip, salt)
@@ -239,20 +249,25 @@ app.post('/api/responses', async (c) => {
     return c.json({ error: 'rate_limited', message: 'Maximum 3 inzendingen per uur.' }, 429)
   }
 
-  const id = await insertResponse(c.env.DB, parsed.data, { ipHash, userAgent, surveyId })
-  await logAudit(c.env.DB, 'response_submitted', ipHash, { id, nps: data.q1_nps, surveyId })
+  const id = await insertResponse(c.env.DB, answers, { ipHash, userAgent, surveyId, lang: data.lang || 'nl' })
+  await logAudit(c.env.DB, 'response_submitted', ipHash, { id, surveyId, codes: Object.keys(answers).length })
 
+  // ── E-mail notificatie (best-effort, alleen voor Reeks I-stijl
+  //    surveys met q1_nps / q3_aantal / q15_wensen_2 in de antwoorden) ──
   const url = new URL(c.req.url)
   const siteUrl = `${url.protocol}//${url.host}`
-  c.executionCtx.waitUntil(
-    sendNewResponseNotification(c.env, {
-      id,
-      nps: data.q1_nps,
-      aantal: data.q3_aantal,
-      wensen: data.q15_wensen_2 ?? '',
-      siteUrl,
-    }).then((res) => logAudit(c.env.DB, 'email_attempt', ipHash, { id, surveyId, ...res }))
-  )
+  const nps = typeof answers.q1_nps === 'number' ? answers.q1_nps : Number(answers.q1_nps)
+  if (Number.isFinite(nps)) {
+    c.executionCtx.waitUntil(
+      sendNewResponseNotification(c.env, {
+        id,
+        nps,
+        aantal: String(answers.q3_aantal ?? ''),
+        wensen: String(answers.q15_wensen_2 ?? ''),
+        siteUrl,
+      }).then((res) => logAudit(c.env.DB, 'email_attempt', ipHash, { id, surveyId, ...res }))
+    )
+  }
 
   return c.json({ ok: true, id, surveyId }, 201)
 })

@@ -14,9 +14,41 @@
     thanksUrl: '/dank-je'
   };
 
-  var REQUIRED_IDS = ['q1_nps','q3_aantal','q4_sfeer','q6_akoestiek','q8_repertoire','q10_interactie','q12_communic','q14_bijdrage'];
-  var TOTAL_QUESTIONS = 20;
-  var STORAGE_KEY = 'survey_huiskamer_draft_v1_' + I18N.lang;
+  // ─── Vraag-IDs en required-set dynamisch uit de DOM lezen ───
+  // Elke vraag-kaart in de HTML draagt data-qid (de vraagcode) en
+  // optioneel data-required="1". Dat maakt deze code survey-agnostisch:
+  // werkt voor Reeks I én voor nieuwe enquêtes met andere vraagcodes.
+  var ALL_QIDS = (function () {
+    var ids = [];
+    document.querySelectorAll('.q-card[data-qid]').forEach(function (c) {
+      var qid = c.getAttribute('data-qid');
+      if (qid) ids.push(qid);
+    });
+    return ids;
+  })();
+  var REQUIRED_IDS = (function () {
+    var ids = [];
+    document.querySelectorAll('.q-card[data-qid][data-required="1"]').forEach(function (c) {
+      var qid = c.getAttribute('data-qid');
+      if (qid) ids.push(qid);
+    });
+    return ids;
+  })();
+  var TOTAL_QUESTIONS = ALL_QIDS.length || 20;
+  // Per-survey draft key zodat invullingen voor de ene enquête niet
+  // doorlekken naar een andere. We pakken survey_id of slug uit
+  // verborgen velden indien aanwezig, en vallen anders terug op een
+  // generieke key (oude gedrag, voor Reeks I).
+  var STORAGE_KEY = (function () {
+    var sidEl = document.getElementById('survey_id');
+    var ssEl = document.getElementById('survey_slug');
+    var bpEl = document.getElementById('brand_prefix');
+    var key = 'survey_draft_v2';
+    if (sidEl && sidEl.value) key += '_id' + sidEl.value;
+    else if (ssEl && ssEl.value) key += '_' + (bpEl ? bpEl.value + '-' : '') + ssEl.value;
+    else key = 'survey_huiskamer_draft_v1';
+    return key + '_' + I18N.lang;
+  })();
 
   // ----- Hamburger menu -----
   var navToggle = document.getElementById('navToggle');
@@ -173,32 +205,45 @@
         return;
       }
 
+      // ── Dynamische payload-opbouw ──────────────────────────
+      // We bouwen een open `answers`-bag: voor elke .q-card op de
+      // pagina nemen we de waarde uit state. Numerieke vragen
+      // worden naar Number geparset; de rest blijft string of null.
+      // De server (validateSurveyAnswers) doet de echte type-check.
+      var answers = {};
+      ALL_QIDS.forEach(function (qid) {
+        var raw = state[qid];
+        var card = document.querySelector('.q-card[data-qid="' + qid + '"]');
+        var qtype = card ? (card.getAttribute('data-type') || card.getAttribute('data-qtype') || '') : '';
+        if (raw == null || raw === '') {
+          answers[qid] = null;
+          return;
+        }
+        if (qtype === 'nps' || qtype === 'scale') {
+          var n = parseInt(raw, 10);
+          answers[qid] = Number.isFinite(n) ? n : null;
+        } else {
+          answers[qid] = String(raw);
+        }
+      });
+
+      // q20_email zit niet in state (apart input-veld); voeg expliciet
+      // toe wanneer q20_contact = ja. Generiek: elk *_email-veld dat
+      // op de pagina staat én niet via state komt, even meenemen.
+      document.querySelectorAll('input[type="email"]').forEach(function (el) {
+        if (el.classList.contains('honeypot')) return;
+        var code = el.getAttribute('data-qcode') || el.name || el.id;
+        if (!code) return;
+        var v = (el.value || '').trim();
+        // Alleen overschrijven als er een waarde is, zodat we per
+        // ongeluk geen lege string boven een ingevulde state zetten.
+        if (v) answers[code] = v;
+      });
+
       var payload = {
         website: document.getElementById('website') ? document.getElementById('website').value : '',
         lang: I18N.lang || 'nl',
-        q1_nps: parseInt(state.q1_nps, 10),
-        q2_blijft_bij: state.q2_blijft_bij || null,
-        q3_aantal: state.q3_aantal,
-        q4_sfeer: parseInt(state.q4_sfeer, 10),
-        q5_sfeer_open: state.q5_sfeer_open || null,
-        q6_akoestiek: parseInt(state.q6_akoestiek, 10),
-        q7_fortepiano: state.q7_fortepiano || null,
-        q8_repertoire: parseInt(state.q8_repertoire, 10),
-        q9_favoriet: state.q9_favoriet || null,
-        q10_interactie: parseInt(state.q10_interactie, 10),
-        q11_gesprek: state.q11_gesprek || null,
-        q12_communic: parseInt(state.q12_communic, 10),
-        q13_catering: state.q13_catering || null,
-        q14_bijdrage: parseInt(state.q14_bijdrage, 10),
-        q15_wensen_2: state.q15_wensen_2 || null,
-        q16_gasten: state.q16_gasten || null,
-        q17_terugkomen: state.q17_terugkomen || null,
-        q18_overige: state.q18_overige || null,
-        q19_naam: state.q19_naam || null,
-        q20_contact: state.q20_contact || null,
-        q20_email: (state.q20_contact && state.q20_contact.toLowerCase() === 'ja')
-          ? (document.getElementById('q20_email') ? document.getElementById('q20_email').value.trim() : null)
-          : null
+        answers: answers,
       };
 
       // Multi-survey: include survey identification when present

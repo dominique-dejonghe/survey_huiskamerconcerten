@@ -1,5 +1,4 @@
 // D1 query helpers
-import type { ResponseInput } from './validation'
 import { uuid } from './crypto'
 
 export type ResponseRow = {
@@ -9,6 +8,7 @@ export type ResponseRow = {
   ip_hash: string | null
   user_agent: string | null
   lang: string
+  // ─ Legacy kolommen (Reeks I) — blijven beschikbaar voor stats/csv/ai
   q1_nps: number
   q2_blijft_bij: string | null
   q3_aantal: string
@@ -30,16 +30,53 @@ export type ResponseRow = {
   q19_naam: string | null
   q20_contact: string | null
   q20_email: string | null
+  // ─ Generieke kolom voor surveys met andere vragen-snapshots
+  answers_json: string | null
   deleted_at: string | null
 }
 
+/**
+ * Generieke response-insert. Werkt voor ELKE survey omdat het écht
+ * antwoorden in `answers_json` stopt; voor Reeks I (en elke survey
+ * die toevallig dezelfde q1..q20 codes hergebruikt) populeren we
+ * óók de legacy-kolommen zodat bestaande stats/csv/AI/exports
+ * onveranderd blijven werken.
+ *
+ * `answers` is een vrije map vraagcode → waarde. Lege strings en
+ * `undefined` worden tot `null` genormaliseerd vóór opslag.
+ */
 export async function insertResponse(
   db: D1Database,
-  data: ResponseInput,
-  meta: { ipHash: string; userAgent: string; surveyId?: number },
+  answers: Record<string, unknown>,
+  meta: { ipHash: string; userAgent: string; surveyId?: number; lang?: string },
 ): Promise<string> {
   const id = uuid()
   const surveyId = meta.surveyId ?? 1
+  const lang = meta.lang || 'nl'
+
+  // ── Normaliseer & pluk legacy-velden ─────────────────────
+  const A = answers // alias, voor leesbaarheid
+
+  const numOrNull = (v: unknown): number | null => {
+    if (v === undefined || v === null || v === '') return null
+    const n = typeof v === 'number' ? v : parseFloat(String(v))
+    return Number.isFinite(n) ? n : null
+  }
+  const strOrNull = (v: unknown): string | null => {
+    if (v === undefined || v === null) return null
+    const s = String(v).trim()
+    return s.length === 0 ? null : s
+  }
+
+  // q20_email enkel bewaren als q20_contact='ja' (privacy)
+  const q20Contact = strOrNull(A.q20_contact)?.toLowerCase() ?? null
+  const q20Email = q20Contact === 'ja' ? strOrNull(A.q20_email) : null
+
+  // ── Volledige answers-bag opslaan als JSON ───────────────
+  // We strippen niet-relevante metadata (al weggefilterd in extractAnswers).
+  // Kolom 'answers_json' bestaat sinds migration 0004.
+  const answersJson = JSON.stringify(A)
+
   await db.prepare(`
     INSERT INTO responses (
       id, survey_id, ip_hash, user_agent, lang,
@@ -50,7 +87,8 @@ export async function insertResponse(
       q10_interactie, q11_gesprek,
       q12_communic, q13_catering, q14_bijdrage,
       q15_wensen_2, q16_gasten, q17_terugkomen, q18_overige,
-      q19_naam, q20_contact, q20_email
+      q19_naam, q20_contact, q20_email,
+      answers_json
     ) VALUES (
       ?, ?, ?, ?, ?,
       ?, ?, ?,
@@ -60,28 +98,22 @@ export async function insertResponse(
       ?, ?,
       ?, ?, ?,
       ?, ?, ?, ?,
-      ?, ?, ?
+      ?, ?, ?,
+      ?
     )
   `).bind(
-    id, surveyId, meta.ipHash, meta.userAgent, data.lang || 'nl',
-    data.q1_nps, nz(data.q2_blijft_bij), data.q3_aantal,
-    data.q4_sfeer, nz(data.q5_sfeer_open),
-    data.q6_akoestiek, nz(data.q7_fortepiano),
-    data.q8_repertoire, nz(data.q9_favoriet),
-    data.q10_interactie, nz(data.q11_gesprek),
-    data.q12_communic, nz(data.q13_catering), data.q14_bijdrage,
-    nz(data.q15_wensen_2), nz(data.q16_gasten), nz(data.q17_terugkomen), nz(data.q18_overige),
-    nz(data.q19_naam),
-    data.q20_contact ?? null,
-    data.q20_contact === 'ja' ? nz(data.q20_email) : null,
+    id, surveyId, meta.ipHash, meta.userAgent, lang,
+    numOrNull(A.q1_nps), strOrNull(A.q2_blijft_bij), strOrNull(A.q3_aantal),
+    numOrNull(A.q4_sfeer), strOrNull(A.q5_sfeer_open),
+    numOrNull(A.q6_akoestiek), strOrNull(A.q7_fortepiano),
+    numOrNull(A.q8_repertoire), strOrNull(A.q9_favoriet),
+    numOrNull(A.q10_interactie), strOrNull(A.q11_gesprek),
+    numOrNull(A.q12_communic), strOrNull(A.q13_catering), numOrNull(A.q14_bijdrage),
+    strOrNull(A.q15_wensen_2), strOrNull(A.q16_gasten), strOrNull(A.q17_terugkomen), strOrNull(A.q18_overige),
+    strOrNull(A.q19_naam), q20Contact, q20Email,
+    answersJson,
   ).run()
   return id
-}
-
-function nz(v: string | null | undefined): string | null {
-  if (v == null) return null
-  const t = v.trim()
-  return t.length === 0 ? null : t
 }
 
 export async function listResponses(db: D1Database, surveyId?: number): Promise<ResponseRow[]> {
